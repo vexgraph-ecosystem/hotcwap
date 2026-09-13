@@ -551,11 +551,17 @@ static VulkanView *findVulkanView(NSWindow *window);
 - (NSSize)windowWillResize:(NSWindow*) sender toSize:(NSSize)frameSize {
     (void) sender;
     Window *w = self.handlePtr;
-    if (w) {
-        NSRect content = [(*w).nsWindow contentRectForFrameRect:NSMakeRect(0, 0, frameSize.width, frameSize.height)];
-        atomic_store_explicit(&(*w).cachedWidth, (int)content.size.width, memory_order_relaxed);
-        atomic_store_explicit(&(*w).cachedHeight, (int)content.size.height, memory_order_relaxed);
-    }
+    // Accept-always; pacing lives in the renderer's rebuild gate, not here.
+    // While live, touch NOTHING: per-step proposed sizes must never reach
+    // the cache — a step landing with a stale intermediate size poisons the
+    // next attach (pane chains rebuilding BACKWARD to an older size after
+    // the board already settled forward). Settle owns the cache; it writes
+    // the true final size exactly once.
+    if (!w || Window_isLiveResizing(w))
+        return frameSize;
+    NSRect content = [(*w).nsWindow contentRectForFrameRect:NSMakeRect(0, 0, frameSize.width, frameSize.height)];
+    atomic_store_explicit(&(*w).cachedWidth, (int)content.size.width, memory_order_relaxed);
+    atomic_store_explicit(&(*w).cachedHeight, (int)content.size.height, memory_order_relaxed);
     return frameSize;
 }
 
