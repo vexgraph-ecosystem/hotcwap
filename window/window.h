@@ -157,6 +157,15 @@ bool Window_attachPanelIOSurface(Window *window, Panel *panel, int width, int he
 bool Window_resizePanelIOSurface(Window *window, Panel *panel, int width, int height);
 void Window_compositeIOSurfaceChildren(Window *window, Panel *contentPanel);
 
+// Board composite: the scene + content panels when backed as full-window
+// CAMetalLayer boards (PanelCocoa_newBoard). Parents the scene board below
+// the content board under the window's root layer at full-window frames —
+// stack: NSWindow -> board Metal -> scene Metal -> content Metal -> child
+// panes, recursively. No-op for panels without board backing (child-pane
+// scenes still composite through Window_compositeIOSurfaceChildren).
+// Thread 0 only (like all layer-tree mutation).
+void Window_compositeBoards(Window *window);
+
 // --- Present policy -----------------------------------------------------------
 //
 // Written by thread 0 whenever; consumed by the GPU thread through atomic

@@ -101,6 +101,7 @@
   *   - applyLayerGravity(window)
   *   - findVulkanView(window)                 : resolve VulkanView from contentView subviews
   *   - Window_compositeIOSurfaceChildren(w, contentPanel)
+  *   - Window_compositeBoards(w)                : scene/content Metal boards
   *   - windowFireFocus(window, focused)
   *   - windowFireResized(window, width, height)
   *   - windowFireMoved(window, x, y)
@@ -1358,6 +1359,84 @@ void Window_compositeIOSurfaceChildren(Window *window, Panel *contentPanel) {
     }
 }
 
+// Board composite: scene + content panels backed as full-window CAMetalLayer
+// boards (PanelCocoa_newBoard, one VkPane chain each). Scene parents below
+// content; both fill the window at TOP_LEFT — the two named boards of the
+// NSWindow -> Metal -> Vulkan-rect-children stack. Child panes nested under
+// either board keep compositing through Window_compositeIOSurfaceChildren.
+// Thread 0 only. Live-gated like its sibling: mid-drag the WindowServer owns
+// all frame motion through the autoresizing masks.
+void Window_compositeBoards(Window *window) {
+    if (!window) return;
+    if (Window_isLiveResizing(window))
+        return;
+    extern void *PanelCocoa_fromPanel(void *panel);
+    extern void *PanelCocoa_layer(void *pc);
+    extern bool PanelCocoa_isBoard(const void *pc);
+    extern void PanelCocoa_setAnchors(void *pc, int anchor, int pivot);
+    Panel *scenePanel = atomic_load_explicit(&(*window).scenePanel, memory_order_acquire);
+    Panel *contentPanel = atomic_load_explicit(&(*window).contentPanel, memory_order_acquire);
+    void *scenePc = PanelCocoa_fromPanel(scenePanel);
+    void *contentPc = PanelCocoa_fromPanel(contentPanel);
+    if (scenePc && !PanelCocoa_isBoard(scenePc))
+        scenePc = nullptr;
+    if (contentPc && !PanelCocoa_isBoard(contentPc))
+        contentPc = nullptr;
+    if (!scenePc && !contentPc)
+        return;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            Window_compositeBoards(window);
+        });
+        return;
+    }
+    @autoreleasepool {
+        NSWindow *nsWindow = (*window).nsWindow;
+        if (!nsWindow) return;
+        NSView *contentView = [nsWindow contentView];
+        if (!contentView) return;
+        NSView *vulkanView = nil;
+        Class vkClass = NSClassFromString(@"VulkanView");
+        for (NSView *v in [contentView subviews]) {
+            if (vkClass && [v isKindOfClass:vkClass]) {
+                vulkanView = v;
+                break;
+            }
+        }
+        CALayer *rootLayer = vulkanView ? [vulkanView layer] : [contentView layer];
+        if (!rootLayer) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        float winW = (float)Window_width(window);
+        float winH = (float)Window_height(window);
+        CALayer *sceneLayer = nullptr;
+        CALayer *contentLayer = nullptr;
+        if (scenePc) {
+            PanelCocoa_setAnchors(scenePc, 0, 0);
+            sceneLayer = (__bridge CALayer*) PanelCocoa_layer(scenePc);
+            if (sceneLayer) {
+                [sceneLayer setFrame:CGRectMake(0, 0, winW, winH)];
+                if ([sceneLayer superlayer] != rootLayer)
+                    [rootLayer addSublayer:sceneLayer];
+            }
+        }
+        if (contentPc) {
+            PanelCocoa_setAnchors(contentPc, 0, 0);
+            contentLayer = (__bridge CALayer*) PanelCocoa_layer(contentPc);
+            if (contentLayer) {
+                [contentLayer setFrame:CGRectMake(0, 0, winW, winH)];
+                if ([contentLayer superlayer] != rootLayer)
+                    [rootLayer addSublayer:contentLayer];
+            }
+        }
+        // Order contract: scene below content. Re-assert every pass so a
+        // re-added layer can never strand above its sibling.
+        if (sceneLayer && contentLayer)
+            [rootLayer insertSublayer:sceneLayer below:contentLayer];
+        [CATransaction commit];
+    }
+}
+
 // --- Runtime state -------------------------------------------------------------
 
 void Window_setEnabled(Window *window, bool enabled) {
@@ -2077,7 +2156,10 @@ void *Window_contentView(Window *window) {
         // Settle: release the live-resize gate so the NEXT present pass runs
         // one final caps-drift rebuild and one final IOSurface re-record at
         // the true final size. The flag clears BEFORE resizeRenderFn so that
-        // settle pass sees a non-live window.
+        // settle pass sees a non-live window. Board panes return to TopLeft
+        // transaction-synced presents first, so the final frames pin exactly.
+        extern void PanelCocoa_setLiveResizingAll(bool live);
+        PanelCocoa_setLiveResizingAll(false);
         atomic_store_explicit(&(*w).liveResizing, false, memory_order_relaxed);
 
         NSSize currentFrameSize = [self frame].size;
@@ -2129,6 +2211,12 @@ void *Window_contentView(Window *window) {
     Window *w = windowHandleOf([self window]);
     if (w)
         atomic_store_explicit(&(*w).liveResizing, true, memory_order_relaxed);
+
+    // Board-contract twin: window-sized Metal boards stretch with the drag
+    // (Resize gravity, transaction-decoupled presents) while fixed child
+    // panes stay TopLeft-pinned. Restored in settleAfterResize.
+    extern void PanelCocoa_setLiveResizingAll(bool live);
+    PanelCocoa_setLiveResizingAll(true);
 
     // GAP-FREE DRAG: while the board swapchain stays at its frozen extent,
     // stretch the last presented frame to cover the LIVE bounds every drag

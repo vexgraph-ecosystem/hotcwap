@@ -45,9 +45,10 @@
  *   - Window_center(window)
  *   - Window_show(window)
  *   - Window_hide(window)
- *   - Window_attachPanelIOSurface(window, panel, width, height)
- *   - Window_resizePanelIOSurface(window, panel, width, height)
- *   - Window_compositeIOSurfaceChildren(window, contentPanel)
+  *   - Window_attachPanelIOSurface(window, panel, width, height)
+  *   - Window_resizePanelIOSurface(window, panel, width, height)
+  *   - Window_compositeIOSurfaceChildren(window, contentPanel)
+  *   - Window_compositeBoards(window)
  *   - Window_renderGeneration(window)
  *   - Window_bringToFront(window)
  *   - Window_minimize(window)
@@ -365,6 +366,11 @@ void Window_setCursorType(Window *window, WindowCursorType type) {
 WindowCursorType Window_getCursorType(const Window *window) {
     (void) window;
     return WINDOW_CURSOR_DEFAULT;
+}
+
+;;INCOMPLETE // Board composite; no-op until implemented.
+void Window_compositeBoards(Window *window) {
+    (void) window;
 }
 
 #endif
