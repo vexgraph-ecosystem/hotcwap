@@ -16,7 +16,7 @@
 // Transferable across reloads (just copy the handle):
 //   - VkDevice, VkQueue, VkPhysicalDevice
 //   - VkPipelineCache (serialized to disk, deserialized by new module)
-//   - VkImage from IOSurface (OS-owned)
+//   - VkImage from pane swapchains (OS-owned via CAMetalLayer)
 //   - VkDeviceMemory (GPU memory is GPU memory)
 //
 // Non-transferable (must recreate):
