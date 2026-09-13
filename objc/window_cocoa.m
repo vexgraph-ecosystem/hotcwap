@@ -1382,21 +1382,25 @@ void Window_compositePanes(Window *window, Panel *contentPanel) {
     }
 }
 
-// Worker-thread pane present: runs a pane-present callback inside an
-// explicit CoreAnimation transaction and returns its result. Panes present
+// Worker-thread pane present: runs a pane-present callback, flushes the
+// worker's CoreAnimation transaction, and returns the callback's result. Panes present
 // with presentsWithTransaction=YES from threads that own no runloop, so
 // their implicit transaction may never commit — holding first (and idle)
 // frames hostage until an unrelated main-thread commit releases them (the
-// blank-until-resize defect). The explicit commit releases each tick's
+// blank-until-resize defect). The explicit flush releases each tick's
 // drawables on worker cadence; layer-frame motion stays main-thread owned.
 // Touches no layers itself (thread-safe by CoreAnimation design).
 bool Window_presentPanesWithTransaction(bool (*presentFn)(void)) {
     if (!presentFn)
         return false;
     @autoreleasepool {
-        [CATransaction begin];
         bool ok = presentFn();
-        [CATransaction commit];
+        // Flush, not begin/commit: the worker thread already sits inside an
+        // open implicit transaction, so an explicit pair would merely nest
+        // and never release anything. flush commits the thread's current
+        // (outermost) transaction — the documented way to force a commit
+        // off-runloop — releasing this tick's drawables on worker cadence.
+        [CATransaction flush];
         return ok;
     }
 }

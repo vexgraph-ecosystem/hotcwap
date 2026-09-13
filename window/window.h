@@ -166,14 +166,14 @@ void Window_compositePanes(Window *window, Panel *contentPanel);
 // Thread 0 only (like all layer-tree mutation).
 void Window_compositeBoards(Window *window);
 
-// Worker-thread pane present: runs a pane-present callback inside an
-// explicit CoreAnimation transaction and returns its result. Panes present
-// with presentsWithTransaction=YES from threads that own no runloop, so
-// their implicit transaction may never commit — holding first (and idle)
-// frames hostage until an unrelated main-thread commit releases them (the
-// blank-until-resize defect). The explicit commit releases each tick's
-// drawables on worker cadence; layer-frame motion stays main-thread owned.
-// Touches no layers itself (thread-safe by CoreAnimation design).
+// Worker-thread pane present: runs a pane-present callback, flushes the
+// worker's CoreAnimation transaction, and returns the callback's result.
+// Panes present with presentsWithTransaction=YES from threads that own no
+// runloop, so their implicit transaction may never commit — holding first
+// (and idle) frames hostage until an unrelated main-thread commit releases
+// them (the blank-until-resize defect). The explicit flush releases each
+// tick's drawables on worker cadence; layer-frame motion stays main-thread
+// owned. Touches no layers itself (thread-safe by CoreAnimation design).
 // Pass VkPane_presentAll as presentFn.
 bool Window_presentPanesWithTransaction(bool (*presentFn)(void));
 
