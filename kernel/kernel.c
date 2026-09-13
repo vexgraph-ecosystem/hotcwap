@@ -181,7 +181,7 @@ static void kernel_present_job(Thread *selfThread, void *task) {
         if (Vk_ready()) {
             if (Vk_clearPresent())
                 anySuccess = true;
-            if (VkPane_presentAll())
+            if (Window_presentPanesWithTransaction(VkPane_presentAll))
                 anySuccess = true;
         }
 
@@ -269,7 +269,7 @@ bool Kernel_tick(Kernel *self, double dt) {
     // board never shows them.
     if (Vk_ready() && !(*self).presentWorker) {
         Vk_clearPresent();
-        VkPane_presentAll();
+        Window_presentPanesWithTransaction(VkPane_presentAll);
     }
 
     return true;
@@ -293,10 +293,31 @@ int Kernel_run(Kernel *self) {
         for (uint32_t wIdx = 0; wIdx < winCount; wIdx++) {
             Window *w = Application_getWindow(app, wIdx);
             if (w) {
-                if (!Vk_ready())
-                    Vk_init(w);
+                if (!Vk_ready()) {
+                    Vk_setWindowSeam(w,
+                                     (void *(*)(void *))Window_metalLayer,
+                                     (bool (*)(void *))Window_isTransparent,
+                                     (VkWindowPresentMode (*)(void *))Window_getPresentMode,
+                                     (uint64_t (*)(void *))Window_renderGeneration,
+                                     (bool (*)(void *))Window_isLiveResizing,
+                                     (void (*)(void *, void *, void *))Window_setResizeRenderHook,
+                                     (void (*)(void *))Window_setGravityTopLeft);
+                    Vk_init();
+                }
+                // Warm up while hidden: both gates must pass — the board
+                // presents AND every pane presented at least once.
+                bool boardOk = false;
+                bool paneOk = false;
                 for (int frame = 0; frame < 60; frame++) {
                     if (Vk_clearPresent())
+                        boardOk = true;
+                    // Pane warm-up: first pane pixels must exist BEFORE
+                    // Window_show — otherwise the window appears blank and
+                    // only fills in ticks later (panes self-register during
+                    // these warm-up presents via preFrame attach).
+                    if (VkPane_count() == 0 || Window_presentPanesWithTransaction(VkPane_presentAll))
+                        paneOk = true;
+                    if (boardOk && paneOk)
                         break;
                     struct timespec ws = { 0, 8 * 1000 * 1000 };
                     nanosleep(&ws, nullptr);

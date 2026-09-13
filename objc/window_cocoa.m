@@ -102,6 +102,7 @@
   *   - findVulkanView(window)                 : resolve VulkanView from contentView subviews
   *   - Window_compositePanes(w, contentPanel)
   *   - Window_compositeBoards(w)                : scene/content Metal boards
+  *   - Window_presentPanesWithTransaction(fn)  : worker pane present in a TX
   *   - windowFireFocus(window, focused)
   *   - windowFireResized(window, width, height)
   *   - windowFireMoved(window, x, y)
@@ -1356,6 +1357,25 @@ void Window_compositePanes(Window *window, Panel *contentPanel) {
         block();
     } else {
         dispatch_async(dispatch_get_main_queue(), block);
+    }
+}
+
+// Worker-thread pane present: runs a pane-present callback inside an
+// explicit CoreAnimation transaction and returns its result. Panes present
+// with presentsWithTransaction=YES from threads that own no runloop, so
+// their implicit transaction may never commit — holding first (and idle)
+// frames hostage until an unrelated main-thread commit releases them (the
+// blank-until-resize defect). The explicit commit releases each tick's
+// drawables on worker cadence; layer-frame motion stays main-thread owned.
+// Touches no layers itself (thread-safe by CoreAnimation design).
+bool Window_presentPanesWithTransaction(bool (*presentFn)(void)) {
+    if (!presentFn)
+        return false;
+    @autoreleasepool {
+        [CATransaction begin];
+        bool ok = presentFn();
+        [CATransaction commit];
+        return ok;
     }
 }
 

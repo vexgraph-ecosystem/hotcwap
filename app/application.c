@@ -346,6 +346,7 @@ static void app_present_job(Thread *selfThread, void *task) {
         uint64_t frameStart = NanoTime_now();
 
         Vk_clearPresent();
+        Window_presentPanesWithTransaction(VkPane_presentAll);
 
         frameCount++;
         uint64_t frameEnd = NanoTime_now();
@@ -450,7 +451,7 @@ static int run_gui(Application *self) {
             // ticks later. Panes self-register during these warm-up presents
             // (preFrame attach), which also moves registration off the
             // worker-startup path. No panes yet counts as ready.
-            if (VkPane_count() == 0 || VkPane_presentAll())
+            if (VkPane_count() == 0 || Window_presentPanesWithTransaction(VkPane_presentAll))
                 paneOk = true;
             if (boardOk && paneOk)
                 break;
