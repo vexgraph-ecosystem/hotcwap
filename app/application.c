@@ -14,6 +14,8 @@
 #include "system/system.h"
 #include "time/nanotime.h"
 #include "vulkan/vk.h"
+#include "vulkan/vk_pane.h"
+#include "window/window.h"
 
 ;;OVERVIEW
 /**
@@ -424,10 +426,33 @@ static int run_gui(Application *self) {
     for (uint32_t i = 0; i < (*self).window_count; i++) {
         Window *w = (*self).windows[i];
         if (!w) continue;
-        if (!Vk_ready())
-            Vk_init(w);
+        if (!Vk_ready()) {
+            Vk_setWindowSeam(w,
+                             (void *(*)(void *))Window_metalLayer,
+                             (bool (*)(void *))Window_isTransparent,
+                             (VkWindowPresentMode (*)(void *))Window_getPresentMode,
+                             (uint64_t (*)(void *))Window_renderGeneration,
+                             (bool (*)(void *))Window_isLiveResizing,
+                             (void (*)(void *, void *, void *))Window_setResizeRenderHook,
+                             (void (*)(void *))Window_setGravityTopLeft);
+            Vk_init();
+        }
+        // Warm up each window while hidden, then show. Both gates must pass:
+        // the board presents AND every pane presented at least once.
+        bool boardOk = false;
+        bool paneOk = false;
         for (int frame = 0; frame < 60; frame++) {
             if (Vk_clearPresent())
+                boardOk = true;
+            // Pane warm-up: presents every registered pane chain while still
+            // hidden, so first pane pixels exist BEFORE Window_show — the
+            // window renders the exact moment it appears instead of N blank
+            // ticks later. Panes self-register during these warm-up presents
+            // (preFrame attach), which also moves registration off the
+            // worker-startup path. No panes yet counts as ready.
+            if (VkPane_count() == 0 || VkPane_presentAll())
+                paneOk = true;
+            if (boardOk && paneOk)
                 break;
             struct timespec ws = { 0, 8 * 1000 * 1000 };
             nanosleep(&ws, nullptr);
