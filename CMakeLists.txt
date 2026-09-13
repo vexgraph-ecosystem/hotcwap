@@ -24,6 +24,10 @@ if(NOT TARGET hotcwap)
 # The OS-stable layer: hot-reload machinery + the OS-agnostic window.
 # A window never hot-updates — it is owned by the OS — so it lives here,
 # next to the loader that persists across module swaps.
+#
+# NOTE: Vulkan core (instance/device/swapchain/pane/surface) has moved to
+# graphvex. hotcwap keeps only the Window seam glue (vk_loader.c bridges
+# kernel.c <-> graphvex's Vk_* API).
 add_library(hotcwap STATIC
     app/application.c
     kernel/kernel.c
@@ -34,8 +38,6 @@ add_library(hotcwap STATIC
     hot/vk_loader.c
     hot/spv_watch.c
     hot/stage.c
-    vulkan/vulkan.c
-    vulkan/vk_pane.c
 )
 target_include_directories(hotcwap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(hotcwap PRIVATE -Wall -Wextra -Werror)
@@ -124,7 +126,6 @@ endif()
 if(APPLE)
     target_sources(hotcwap PRIVATE
         objc/window_cocoa.m
-        vulkan/vulkan_mac.c
     )
     set_source_files_properties(objc/window_cocoa.m PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc")

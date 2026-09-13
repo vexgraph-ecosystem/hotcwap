@@ -10,6 +10,7 @@
 #include "oop/type.h"
 #include "time/nanotime.h"
 #include "vulkan/vk.h"
+#include "vulkan/vk_layer.h"
 #include "vulkan/vk_pane.h"
 #include "window/window.h"
 
@@ -179,10 +180,23 @@ static void kernel_present_job(Thread *selfThread, void *task) {
 
         bool anySuccess = false;
         if (Vk_ready()) {
+#ifdef __APPLE__
+            // Explicit per-walk transaction: the worker owns no runloop, so
+            // YES-presents release here instead of stalling for thread 0.
+            Window_workerPresentBegin();
+#endif
             if (Vk_clearPresent())
+                anySuccess = true;
+            // Retained offscreen layers render themselves first (dirty only),
+            // then panes — same-queue FIFO means the board pass that samples
+            // them later reads finished slots (Rule 14 composite != render).
+            if (VkLayer_visit())
                 anySuccess = true;
             if (VkPane_presentAll())
                 anySuccess = true;
+#ifdef __APPLE__
+            Window_workerPresentEnd();
+#endif
         }
 
         if (anySuccess) {
@@ -269,6 +283,7 @@ bool Kernel_tick(Kernel *self, double dt) {
     // board never shows them.
     if (Vk_ready() && !(*self).presentWorker) {
         Vk_clearPresent();
+        VkLayer_visit();
         VkPane_presentAll();
     }
 

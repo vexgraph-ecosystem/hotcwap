@@ -14,6 +14,7 @@
 #include "system/system.h"
 #include "time/nanotime.h"
 #include "vulkan/vk.h"
+#include "vulkan/vk_layer.h"
 #include "vulkan/vk_pane.h"
 #include "window/window.h"
 
@@ -345,8 +346,17 @@ static void app_present_job(Thread *selfThread, void *task) {
     while (atomic_load_explicit(&(*self).running, memory_order_relaxed)) {
         uint64_t frameStart = NanoTime_now();
 
+#ifdef __APPLE__
+        // Explicit per-walk transaction: the worker owns no runloop, so
+        // YES-presents release here instead of stalling for thread 0.
+        Window_workerPresentBegin();
+#endif
         Vk_clearPresent();
+        VkLayer_visit();
         VkPane_presentAll();
+#ifdef __APPLE__
+        Window_workerPresentEnd();
+#endif
 
         frameCount++;
         uint64_t frameEnd = NanoTime_now();
@@ -442,9 +452,15 @@ static int run_gui(Application *self) {
         // the board presents AND every pane presented at least once.
         bool boardOk = false;
         bool paneOk = false;
+        bool layerOk = false;
         for (int frame = 0; frame < 60; frame++) {
             if (Vk_clearPresent())
                 boardOk = true;
+            // Retained offscreen layer warm-up: renders every registered dirty
+            // layer before the window shows (they register during preFrame
+            // attach alongside panes). No layers yet counts as ready.
+            if (VkLayer_count() == 0 || VkLayer_visit())
+                layerOk = true;
             // Pane warm-up: presents every registered pane chain while still
             // hidden, so first pane pixels exist BEFORE Window_show — the
             // window renders the exact moment it appears instead of N blank
@@ -453,7 +469,7 @@ static int run_gui(Application *self) {
             // worker-startup path. No panes yet counts as ready.
             if (VkPane_count() == 0 || VkPane_presentAll())
                 paneOk = true;
-            if (boardOk && paneOk)
+            if (boardOk && paneOk && layerOk)
                 break;
             struct timespec ws = { 0, 8 * 1000 * 1000 };
             nanosleep(&ws, nullptr);
