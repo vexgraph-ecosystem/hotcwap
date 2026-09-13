@@ -133,7 +133,7 @@ void Window_setVisible(Window *window, bool visible);
 // pass — nothing is displayed. The renderer re-reads this pointer every frame
 // (relaxed atomic), so swaps land on the next presented frame.
 // Two-layer split architecture:
-//   - contentPanel: the UI tree (native IOSurface-backed CALayers composited by AppKit)
+//   - contentPanel: the UI tree (board-backed, child panes composited by AppKit)
 //   - scenePanel: the scene tree (Vulkan swapchain-backed)
 
 void   Window_setContainer(Window *window, Panel *root);
@@ -147,22 +147,22 @@ Panel *Window_getContentPanel(const Window *window);
 void   Window_setScenePanel(Window *window, Panel *panel);
 Panel *Window_getScenePanel(const Window *window);
 
-// --- IOSurface panel bridge (C callable from renderer) ------------------------
+// --- Metal pane bridge (C callable from renderer) ------------------------
 //
-// The content panel children get IOSurface backing and AppKit composites them
-// via CALayers. These functions let the renderer attach, resize, render, and
-// position the CALayers for IOSurface-backed panels. Thread 0 only.
+// Scene children get Metal pane backing and AppKit composites them
+// via CALayers. These functions let the renderer attach, resize, and
+// position the CALayers for Metal-backed panels. Thread 0 only.
 
-bool Window_attachPanelIOSurface(Window *window, Panel *panel, int width, int height);
-bool Window_resizePanelIOSurface(Window *window, Panel *panel, int width, int height);
-void Window_compositeIOSurfaceChildren(Window *window, Panel *contentPanel);
+bool Window_attachPanes(Window *window, Panel *panel, int width, int height);
+bool Window_resizePanes(Window *window, Panel *panel, int width, int height);
+void Window_compositePanes(Window *window, Panel *contentPanel);
 
 // Board composite: the scene + content panels when backed as full-window
 // CAMetalLayer boards (PanelCocoa_newBoard). Parents the scene board below
 // the content board under the window's root layer at full-window frames —
 // stack: NSWindow -> board Metal -> scene Metal -> content Metal -> child
 // panes, recursively. No-op for panels without board backing (child-pane
-// scenes still composite through Window_compositeIOSurfaceChildren).
+// scenes still composite through Window_compositePanes).
 // Thread 0 only (like all layer-tree mutation).
 void Window_compositeBoards(Window *window);
 
@@ -203,9 +203,9 @@ bool Window_isEnabled(const Window *window);
 // Live-resize flag: set by thread 0 while AppKit is inside an active window
 // drag (NSViewLiveResize). The renderer reads it to keep presenting the
 // current chain WITHOUT rebuilding: live resize moves CALayer frames (panes
-// track at full rate), it must NOT re-record IOSurface children or rebuild
+// track at full rate), it must NOT resize pane chains or rebuild
 // swapchains per drag frame. On settle the flag clears and exactly one
-// re-record + one rebuild converge to the final size.
+// resize + one rebuild converge to the final size.
 bool Window_isLiveResizing(const Window *window);
 
 // --- Chrome capability toggles (style-mask API) ---

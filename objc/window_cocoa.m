@@ -60,7 +60,7 @@
   *   _Atomic bool transparent;                // composite transparency request
   *   _Atomic uint64_t renderGeneration;       // policy-reflection counter (swapchain rebuild)
   *   _Atomic(Panel*) container;               // content root (nullptr = clear-only pass)
-  *   _Atomic(Panel*) contentPanel;            // UI tree (IOSurface-backed when native)
+  *   _Atomic(Panel*) contentPanel;            // UI tree (board or child panes when native)
   *   _Atomic(Panel*) scenePanel;              // scene tree (Vulkan-backed)
   *   _Atomic bool enabled;                    // false mutes ALL OS input
   *   bool lastFocused;                        // focus-flip detection during pump
@@ -100,7 +100,7 @@
   *   - windowFireClose(window)
   *   - applyLayerGravity(window)
   *   - findVulkanView(window)                 : resolve VulkanView from contentView subviews
-  *   - Window_compositeIOSurfaceChildren(w, contentPanel)
+  *   - Window_compositePanes(w, contentPanel)
   *   - Window_compositeBoards(w)                : scene/content Metal boards
   *   - windowFireFocus(window, focused)
   *   - windowFireResized(window, width, height)
@@ -121,8 +121,8 @@
   *   - Window_destroy(window)
   *   - Window_shouldClose(window)
   *   - Window_renderGeneration(window)
-  *   - Window_attachPanelIOSurface(window, contentPanel, w, h)
-  *   - Window_resizePanelIOSurface(window, panel, width, height)
+  *   - Window_attachPanes(window, contentPanel, w, h)
+  *   - Window_resizePanes(window, panel, width, height)
   *   - styleMaskOf(window)
   *   - updateStyleMask(window, add, clear)
   *   - Window_width(window)
@@ -292,7 +292,7 @@ struct Window {
 
     // --- content root: nullptr => clear-only pass --
     _Atomic(Panel*) container;
-    _Atomic(Panel*) contentPanel;  // UI tree (native IOSurface-backed CALayers)
+    _Atomic(Panel*) contentPanel;  // UI tree (board-backed or child panes)
     _Atomic(Panel*) scenePanel;    // Scene tree (Vulkan-backed)
 
     // --- runtime state --
@@ -594,7 +594,7 @@ static VulkanView *findVulkanView(NSWindow *window);
     if (contentPanel) {
         extern void Darling_setPanelSize(Panel *p, float w, float h);
         Darling_setPanelSize(contentPanel, (float)content.size.width, (float)content.size.height);
-        Window_compositeIOSurfaceChildren(w, contentPanel);
+        Window_compositePanes(w, contentPanel);
     }
     if ((*w).resizeRenderFn)
         (*w).resizeRenderFn((*w).resizeRenderUserdata);
@@ -986,10 +986,10 @@ void Window_pollEvents(void) {
             if (rectChanged && (*handle).resizeRenderFn)
                 (*(*handle).resizeRenderFn)((*handle).resizeRenderUserdata);
 
-            // IOSurface content panel: attach/position child CALayers on the content view
+            // Child panes: attach/position child CALayers on the content view
             Panel *contentPanel = atomic_load_explicit(&(*handle).contentPanel, memory_order_acquire);
             if (contentPanel) {
-                Window_compositeIOSurfaceChildren(handle, contentPanel);
+                Window_compositePanes(handle, contentPanel);
             }
 
             // Discriminator probe: who is stretching? Log what the layer
@@ -1224,7 +1224,7 @@ void Window_setContentPanel(Window *window, Panel *panel) {
     if (!window)
         return;
     atomic_store_explicit(&(*window).contentPanel, panel, memory_order_release);
-    // Content panel itself is a logical placeholder — IOSurface backing
+    // Content panel itself is a logical placeholder — Metal backing
     // goes on its children, not the panel itself.
 }
 
@@ -1242,22 +1242,22 @@ Panel *Window_getScenePanel(const Window *window) {
     return window ? atomic_load_explicit(&(*window).scenePanel, memory_order_acquire) : nullptr;
 }
 
-// --- IOSurface panel bridge (C callable from renderer) ------------------------
+// --- Metal pane bridge (C callable from renderer) ------------------------
 //
 // Child-iteration logic lives in panel_bridge.c (a pure-C file that can
 // see panel.h). This file just calls into it. Thread 0 only.
 
-bool Window_attachPanelIOSurface(Window *window, Panel *panel, int width, int height) {
+bool Window_attachPanes(Window *window, Panel *panel, int width, int height) {
     if (!window || !panel) return false;
-    extern int Darling_attachPanelIOSurfaceChildren(Window *, Panel *, int, int);
-    // Attach IOSurface backing to ALL children of the content panel
-    return Darling_attachPanelIOSurfaceChildren(window, panel, width, height) >= 0;
+    extern int Darling_attachPanes(Window *, Panel *, int, int);
+    // Attach Metal pane backing to the scene children of the content panel
+    return Darling_attachPanes(window, panel, width, height) >= 0;
 }
 
-bool Window_resizePanelIOSurface(Window *window, Panel *panel, int width, int height) {
+bool Window_resizePanes(Window *window, Panel *panel, int width, int height) {
     if (!window || !panel) return false;
-    extern int Darling_resizePanelIOSurfaceChildren(Window *, Panel *, int, int);
-    return Darling_resizePanelIOSurfaceChildren(window, panel, width, height) >= 0;
+    extern int Darling_resizePanes(Window *, Panel *, int, int);
+    return Darling_resizePanes(window, panel, width, height) >= 0;
 }
 
 void *Window_getPanelLayer(Window *window, Panel *panel) {
@@ -1268,7 +1268,7 @@ void *Window_getPanelLayer(Window *window, Panel *panel) {
     return pc ? PanelCocoa_layer(pc) : nullptr;
 }
 
-void Window_compositeIOSurfaceChildren(Window *window, Panel *contentPanel) {
+void Window_compositePanes(Window *window, Panel *contentPanel) {
     if (!window || !contentPanel) return;
 
     // LIVE-RESIZE CONTRACT (Rule 11.6): while the window is being dragged,
@@ -1363,7 +1363,7 @@ void Window_compositeIOSurfaceChildren(Window *window, Panel *contentPanel) {
 // boards (PanelCocoa_newBoard, one VkPane chain each). Scene parents below
 // content; both fill the window at TOP_LEFT — the two named boards of the
 // NSWindow -> Metal -> Vulkan-rect-children stack. Child panes nested under
-// either board keep compositing through Window_compositeIOSurfaceChildren.
+// either board keep compositing through Window_compositePanes.
 // Thread 0 only. Live-gated like its sibling: mid-drag the WindowServer owns
 // all frame motion through the autoresizing masks.
 void Window_compositeBoards(Window *window) {
@@ -2154,7 +2154,7 @@ void *Window_contentView(Window *window) {
     Window *w = windowHandleOf([self window]);
     if (w) {
         // Settle: release the live-resize gate so the NEXT present pass runs
-        // one final caps-drift rebuild and one final IOSurface re-record at
+        // one final caps-drift rebuild at
         // the true final size. The flag clears BEFORE resizeRenderFn so that
         // settle pass sees a non-live window. Board panes return to TopLeft
         // transaction-synced presents first, so the final frames pin exactly.
@@ -2198,7 +2198,7 @@ void *Window_contentView(Window *window) {
         if (contentPanel) {
             extern void Darling_setPanelSize(Panel *p, float w, float h);
             Darling_setPanelSize(contentPanel, (float)finalSize.width, (float)finalSize.height);
-            Window_compositeIOSurfaceChildren(w, contentPanel);
+            Window_compositePanes(w, contentPanel);
         }
 
         if ((*w).resizeRenderFn)
@@ -2228,7 +2228,7 @@ void *Window_contentView(Window *window) {
     // Pane anchoring during the drag is WindowServer-accelerated: their
     // autoresizingMask + anchorPoint (PanelCocoa_setAnchors) make CA move the
     // sublayers inside the window-resize transaction, edge-locked, no per-event
-    // CPU frames (Window_compositeIOSurfaceChildren early-returns while live).
+    // CPU frames (Window_compositePanes early-returns while live).
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
@@ -2311,7 +2311,7 @@ void *Window_contentView(Window *window) {
     if (contentPanel) {
         extern void Darling_setPanelSize(Panel *p, float w, float h);
         Darling_setPanelSize(contentPanel, (float)newSize.width, (float)newSize.height);
-        Window_compositeIOSurfaceChildren(w, contentPanel);
+        Window_compositePanes(w, contentPanel);
     }
 
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
