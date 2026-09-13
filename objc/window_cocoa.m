@@ -895,6 +895,16 @@ static void routeEvent(NSEvent *event) {
 // the pump, mirror the OS's key window into the focus word so the rest of
 // the engine can ask "who is focused?" without touching AppKit.
 void Window_pollEvents(void) {
+    // Per-tick transaction: the pump is a manual event drain, never a real
+    // runloop turn — so without this, main-thread CoreAnimation transactions
+    // may never commit at idle, holding every presentsWithTransaction=YES
+    // drawable hostage (motion-during-resize, freeze-at-idle: the drag's
+    // modal loop commits continuously, the idle pump does not). One explicit
+    // commit per tick releases worker + board presents on frame cadence and
+    // batches this pass's layer mutations into the same vsync. Empty at
+    // idle = negligible cost. Never runs during a drag (the modal tracking
+    // loop owns thread 0 then), so the live-resize NO-contract is untouched.
+    [CATransaction begin];
     @autoreleasepool {
         NSEvent *event;
         while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny
@@ -1010,15 +1020,27 @@ void Window_pollEvents(void) {
                     CGSize ds = CGSizeZero;
                     if ([view.layer isKindOfClass:[CAMetalLayer class]])
                         ds = ((CAMetalLayer*) view.layer).drawableSize;
-                    NSLog(@"vk:probe frame=%.0fx%.0f content=%dx%d gravity=%@ drawable=%.0fx%.0f",
+                    extern uint64_t VkPane_presentCount(int index);
+                    extern uint64_t VkPane_skipCount(int index);
+                    extern int VkPane_count(void);
+                    uint64_t presents = 0, skips = 0;
+                    int panes = VkPane_count();
+                    for (int pi = 0; pi < panes; pi++) {
+                        presents += VkPane_presentCount(pi);
+                        skips += VkPane_skipCount(pi);
+                    }
+                    NSLog(@"vk:probe frame=%.0fx%.0f content=%dx%d gravity=%@ drawable=%.0fx%.0f panes=%d presents=%llu skips=%llu",
                           [(*handle).nsWindow frame].size.width,
                           [(*handle).nsWindow frame].size.height,
                           (*handle).cachedWidth, (*handle).cachedHeight,
-                          g, ds.width, ds.height);
+                          g, ds.width, ds.height, panes,
+                          presents, skips);
                 }
             }
         }
     }
+    // Per-tick commit (see entry): releases YES-presents on frame cadence.
+    [CATransaction commit];
 }
 
 // Build the NSWindow + C handle. Shared by every constructor. The window is
