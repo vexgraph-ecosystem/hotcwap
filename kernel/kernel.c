@@ -181,7 +181,7 @@ static void kernel_present_job(Thread *selfThread, void *task) {
         if (Vk_ready()) {
             if (Vk_clearPresent())
                 anySuccess = true;
-            if (Window_presentPanesWithTransaction(VkPane_presentAll))
+            if (VkPane_presentAll())
                 anySuccess = true;
         }
 
@@ -269,7 +269,7 @@ bool Kernel_tick(Kernel *self, double dt) {
     // board never shows them.
     if (Vk_ready() && !(*self).presentWorker) {
         Vk_clearPresent();
-        Window_presentPanesWithTransaction(VkPane_presentAll);
+        VkPane_presentAll();
     }
 
     return true;
@@ -315,7 +315,7 @@ int Kernel_run(Kernel *self) {
                     // Window_show — otherwise the window appears blank and
                     // only fills in ticks later (panes self-register during
                     // these warm-up presents via preFrame attach).
-                    if (VkPane_count() == 0 || Window_presentPanesWithTransaction(VkPane_presentAll))
+                    if (VkPane_count() == 0 || VkPane_presentAll())
                         paneOk = true;
                     if (boardOk && paneOk)
                         break;

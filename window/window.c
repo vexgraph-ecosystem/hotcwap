@@ -49,7 +49,6 @@
   *   - Window_resizePanes(window, panel, width, height)
   *   - Window_compositePanes(window, contentPanel)
   *   - Window_compositeBoards(window)
-  *   - Window_presentPanesWithTransaction(fn)
  *   - Window_renderGeneration(window)
  *   - Window_bringToFront(window)
  *   - Window_minimize(window)
@@ -372,11 +371,6 @@ WindowCursorType Window_getCursorType(const Window *window) {
 ;;INCOMPLETE // Board composite; no-op until implemented.
 void Window_compositeBoards(Window *window) {
     (void) window;
-}
-
-;;INCOMPLETE // Worker pane-present transaction; direct call until implemented.
-bool Window_presentPanesWithTransaction(bool (*presentFn)(void)) {
-    return presentFn ? presentFn() : false;
 }
 
 #endif
