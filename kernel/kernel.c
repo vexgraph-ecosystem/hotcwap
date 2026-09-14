@@ -198,6 +198,7 @@ static void kernel_present_job(Thread *selfThread, void *task) {
             Window *w = nullptr;
             if ((*self).applicationCount > 0 && (*self).applications[0] != nullptr)
                 w = Application_getWindow((*self).applications[0], 0);
+            bool sceneAdvanced = false;
             if (w != nullptr) {
                 Panel *content = Window_getContentPanel(w);
                 if (content != nullptr) {
@@ -205,20 +206,37 @@ static void kernel_present_job(Thread *selfThread, void *task) {
                     Darling_propagatePaneDirty(w, content);
                 }
                 // Render dirty retained scene targets offscreen
-                VkLayer_visit();
+                sceneAdvanced = VkLayer_visit();
             }
 #ifdef __APPLE__
             // Explicit per-walk transaction: the worker owns no runloop, so
             // YES-presents release here instead of stalling for thread 0.
             Window_workerPresentBegin();
 #endif
+            bool walkPresented = false;
             if (VkPane_count() == 0) {
-                Vk_clearPresent();
+                walkPresented = Vk_clearPresent();
             } else {
-                VkPane_presentAll();
+                walkPresented = VkPane_presentAll();
             }
 #ifdef __APPLE__
             Window_workerPresentEnd();
+#endif
+#ifndef NDEBUG
+            // Throttled walk census (1Hz, debug only — release stays silent
+            // per Rule 35): which stage of the demand chain is stuck is
+            // answered by one line. panes=chains present, layers=retained
+            // scene targets registered, layerRendered/planePresented=did
+            // work this walk, live=stuck-resize flag.
+            static uint64_t s_walkLogLast = 0;
+            uint64_t walkNow = NanoTime_now();
+            if (walkNow - s_walkLogLast >= 1000000000ULL) {
+                s_walkLogLast = walkNow;
+                int live = (w != nullptr && Window_isLiveResizing(w)) ? 1 : 0;
+                fprintf(stderr, "vk: walk panes=%d layers=%d layerRendered=%d panePresented=%d live=%d\n",
+                        VkPane_count(), VkLayer_count(),
+                        sceneAdvanced ? 1 : 0, walkPresented ? 1 : 0, live);
+            }
 #endif
         }
 
