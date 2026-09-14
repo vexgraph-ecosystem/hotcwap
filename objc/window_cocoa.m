@@ -73,11 +73,14 @@
    *
    * PRIVATE HELPERS (file-local ObjC, no external API):
    * ----------------------------------------------------------------------------
-   *   VulkanView : NSView — Vulkan backing layer + live-resize / zoom bridge
-   *     BOOL _liveResizing;        // true during NSViewLiveResize (thread 0)
-   *     BOOL _zooming;             // true during instant-zoom bridge (thread 0)
-   *     NSSize _pendingSize;       // stashed size during drag/zoom, consumed at settle
-   *   WindowDelegate : NSObject <NSWindowDelegate> — per-window close/focus/resize delegate
+  *   VulkanView : NSView — Vulkan backing layer + live-resize / zoom bridge
+  *     BOOL _liveResizing;        // true during NSViewLiveResize (thread 0)
+  *     BOOL _zooming;             // true during instant-zoom bridge (thread 0)
+  *     NSSize _pendingSize;       // stashed size during drag/zoom, consumed at settle
+  *   WindowDelegate : NSObject <NSWindowDelegate> — per-window close/focus/resize delegate
+*   settleAfterResize — idempotent: clears live-resizing, reasserts TopLeft
+   *     gravity, applies _pendingSize once, exactly one rebuild/re-render;
+   *     repeat calls with no live state return early
    *
    * Zoom bridge contract: double-click titlebar → animationResizeTime returns 0.0
    * (instant), sets _zooming + kCAGravityResize; setFrameSize freezes drawableSize;
@@ -147,6 +150,14 @@
  *   - Window_present(window, frame)
  *   - Window_contentView(window)
  *   - Window_metalLayer(window)
+  *   - Window_workerPresentBegin(void) / Window_workerPresentEnd(void)
+  *     : explicit CATransaction per worker board+pane walk (Rule 11
+  *     pane-of-glass: worker owns no runloop); layers stay
+  *     presentsWithTransaction=YES from makeBackingLayer through drag —
+  *     gravity alone flips (Resize mid-drag, TopLeft at settle).
+  *     Single-arm: exactly one walk armed at a time (nested Begin drops,
+  *     End no-ops when disarmed); End logs the commit identity in debug
+  *     only, release stays log-free (Rule 35 hot-minimal)
  *
  * Setters:
  *   - Window_setPresentMode(window, mode)
@@ -427,8 +438,10 @@ static VulkanView *findVulkanView(NSWindow *window);
 // macOS performs a desktop Spaces slide animation lasting 1.5 - 2.0 seconds.
 // Prematurely settling in viewDidEndLiveResize (which Cocoa fires at ~11ms on initial frame layout)
 // causes swapchain rebuild churn and locks CAMetalLayer presents against frozen Core Animation
-// transactions. By maintaining liveResizing = true and presentsWithTransaction = NO throughout
-// the Spaces slide, the background worker continues smoothly without stalls, and the true
+// transactions. By maintaining liveResizing = true with presentsWithTransaction = YES
+// throughout the Spaces slide, the background worker keeps presenting inside
+// its own explicit per-walk CATransaction (Window_workerPresentBegin/End —
+// worker threads own no runloop to commit an implicit one), and the true
 // settle executes upon windowDidEnterFullScreen / windowDidExitFullScreen.
 
 - (void)windowWillEnterFullScreen:(NSNotification*) notification {
@@ -442,10 +455,11 @@ static VulkanView *findVulkanView(NSWindow *window);
     if (vulkanView) {
         [vulkanView setFullScreenTransitioning:YES];
         if ([[vulkanView layer] isKindOfClass:[CAMetalLayer class]]) {
+            // YES persists from makeBackingLayer through the transition: the
+            // worker commits its own explicit transaction per present walk.
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
             [(CAMetalLayer*) [vulkanView layer] setContentsGravity:kCAGravityResize];
-            [(CAMetalLayer*) [vulkanView layer] setPresentsWithTransaction:NO];
             [CATransaction commit];
         }
     }
@@ -480,10 +494,11 @@ static VulkanView *findVulkanView(NSWindow *window);
     if (vulkanView) {
         [vulkanView setFullScreenTransitioning:YES];
         if ([[vulkanView layer] isKindOfClass:[CAMetalLayer class]]) {
+            // YES persists from makeBackingLayer through the transition: the
+            // worker commits its own explicit transaction per present walk.
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
             [(CAMetalLayer*) [vulkanView layer] setContentsGravity:kCAGravityResize];
-            [(CAMetalLayer*) [vulkanView layer] setPresentsWithTransaction:NO];
             [CATransaction commit];
         }
     }
@@ -519,21 +534,7 @@ static VulkanView *findVulkanView(NSWindow *window);
 // TopLeft and applies the true final size in one shot.
 - (NSTimeInterval)window:(NSWindow*) window animationResizeTime:(NSRect)newFrame {
     (void) newFrame;
-    Window *w = self.handlePtr;
-    if (w) {
-        atomic_store_explicit(&(*w).liveResizing, true, memory_order_relaxed);
-    }
-    VulkanView *vulkanView = findVulkanView(window);
-    if (vulkanView) {
-        [vulkanView setZooming:YES];
-        if ([[vulkanView layer] isKindOfClass:[CAMetalLayer class]]) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            [(CAMetalLayer*) [vulkanView layer] setContentsGravity:kCAGravityResize];
-            [(CAMetalLayer*) [vulkanView layer] setPresentsWithTransaction:NO];
-            [CATransaction commit];
-        }
-    }
+    (void) window;
     return 0.0;
 }
 
@@ -551,13 +552,7 @@ static VulkanView *findVulkanView(NSWindow *window);
 - (NSSize)windowWillResize:(NSWindow*) sender toSize:(NSSize)frameSize {
     (void) sender;
     Window *w = self.handlePtr;
-    // Accept-always; pacing lives in the renderer's rebuild gate, not here.
-    // While live, touch NOTHING: per-step proposed sizes must never reach
-    // the cache — a step landing with a stale intermediate size poisons the
-    // next attach (pane chains rebuilding BACKWARD to an older size after
-    // the board already settled forward). Settle owns the cache; it writes
-    // the true final size exactly once.
-    if (!w || Window_isLiveResizing(w))
+    if (!w)
         return frameSize;
     NSRect content = [(*w).nsWindow contentRectForFrameRect:NSMakeRect(0, 0, frameSize.width, frameSize.height)];
     atomic_store_explicit(&(*w).cachedWidth, (int)content.size.width, memory_order_relaxed);
@@ -575,16 +570,17 @@ static VulkanView *findVulkanView(NSWindow *window);
     atomic_store_explicit(&(*w).cachedHeight, (int)content.size.height, memory_order_relaxed);
 
     VulkanView *vulkanView = findVulkanView((*w).nsWindow);
-    // LIVE RESIZE / ZOOM / FULLSCREEN GATE: during an active drag, zoom animation, or
-    // fullscreen space transition, intermediate steps must NOT settle or mutate layer frames.
-    // viewDidEndLiveResize or windowDidEnter/ExitFullScreen owns the settle pass. Prematurely
-    // clearing flags mid-animation causes layout fighting and churn.
-    if ([(*w).nsWindow inLiveResize] || Window_isLiveResizing(w)
-        || (vulkanView && (vulkanView->_liveResizing || vulkanView->_fullScreenTransitioning))) {
+    // LIVE RESIZE / FULLSCREEN GATE: during an active mouse drag or fullscreen space transition,
+    // intermediate steps are handled by setFrameSize. viewDidEndLiveResize owns the final drag settle.
+    if ([(*w).nsWindow inLiveResize] || (vulkanView && (vulkanView->_liveResizing || vulkanView->_fullScreenTransitioning))) {
         return;
     }
 
-    // Programmatic / non-live resize settle pass
+    if (vulkanView) {
+        [vulkanView settleAfterResize];
+    }
+
+    // Programmatic / zoom resize settle pass
     if (vulkanView && [[vulkanView layer] isKindOfClass:[CAMetalLayer class]]) {
         CGFloat scale = [(*w).nsWindow backingScaleFactor];
         if (scale <= 0.0)
@@ -601,6 +597,8 @@ static VulkanView *findVulkanView(NSWindow *window);
         extern void Darling_setPanelSize(Panel *p, float w, float h);
         Darling_setPanelSize(contentPanel, (float)content.size.width, (float)content.size.height);
         Window_compositePanes(w, contentPanel);
+        extern void Window_compositeBoards(Window *window);
+        Window_compositeBoards(w);
     }
     if ((*w).resizeRenderFn)
         (*w).resizeRenderFn((*w).resizeRenderUserdata);
@@ -612,6 +610,12 @@ static NSWindow *sLastWindow = nil;
 // Key-window claim pending: set by Window_show/Window_focus, drained by the
 // pump (Window_pollEvents) once the app is active and the claim sticks.
 static NSWindow *sPendingKeyWindow = nil;
+
+// Worker present single-arm (Rule 35 hot-minimal): exactly one board+pane
+// walk transaction armed at a time. Begin is idempotent (a nested arm drops);
+// End commits only when armed, then logs the commit identity in debug only
+// (release stays log-free — the flag flip is the whole release cost).
+static bool s_workerPresentArmed = false;
 
 // Window-lifecycle adapter fan-out. All fire from thread 0 only.
 static void windowFireClose(Window *window) {
@@ -990,9 +994,9 @@ void Window_pollEvents(void) {
 
             // Gravity contract: TopLeft is STEADY-STATE POLICY, asserted
             // every pass on thread 0 before any present can sample the
-            // layer. During live resize (Rule 11.6) the drag owns Resize
-            // gravity; we must NOT fight the kCAGravityResize set in
-            // viewWillStartLiveResize.
+            // layer. During live resize (Rule 11.6) the drag already pins
+            // TopLeft (freeze-exact); the gate skips the redundant
+            // reassert mid-drag so the tracking loop stays clean.
             if (!Window_isLiveResizing(handle))
                 applyLayerGravity(handle);
 
@@ -1396,8 +1400,6 @@ void Window_compositePanes(Window *window, Panel *contentPanel) {
 // all frame motion through the autoresizing masks.
 void Window_compositeBoards(Window *window) {
     if (!window) return;
-    if (Window_isLiveResizing(window))
-        return;
     extern void *PanelCocoa_fromPanel(void *panel);
     extern void *PanelCocoa_layer(void *pc);
     extern bool PanelCocoa_isBoard(const void *pc);
@@ -1440,18 +1442,18 @@ void Window_compositeBoards(Window *window) {
         CALayer *sceneLayer = nullptr;
         CALayer *contentLayer = nullptr;
         if (scenePc) {
-            PanelCocoa_setAnchors(scenePc, 0, 0);
             sceneLayer = (__bridge CALayer*) PanelCocoa_layer(scenePc);
             if (sceneLayer) {
+                sceneLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
                 [sceneLayer setFrame:CGRectMake(0, 0, winW, winH)];
                 if ([sceneLayer superlayer] != rootLayer)
                     [rootLayer addSublayer:sceneLayer];
             }
         }
         if (contentPc) {
-            PanelCocoa_setAnchors(contentPc, 0, 0);
             contentLayer = (__bridge CALayer*) PanelCocoa_layer(contentPc);
             if (contentLayer) {
+                contentLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
                 [contentLayer setFrame:CGRectMake(0, 0, winW, winH)];
                 if ([contentLayer superlayer] != rootLayer)
                     [rootLayer addSublayer:contentLayer];
@@ -2177,6 +2179,16 @@ void *Window_contentView(Window *window) {
 }
 
 - (void)settleAfterResize {
+    Window *w = windowHandleOf([self window]);
+    // Idempotent settle: exactly one rebuild/re-render per drag. A repeat
+    // call with no live state and no stashed size is a no-op — gravity is
+    // already TopLeft, _pendingSize already consumed, caches already final.
+    // (viewDidEndLiveResize and windowDidEnter/ExitFullScreen may both fire
+    // for one gesture; the second call lands here and returns.)
+    if (!_liveResizing && !_zooming && _pendingSize.width == 0.0
+        && _pendingSize.height == 0.0
+        && (w == nullptr || !Window_isLiveResizing(w)))
+        return;
     _liveResizing = NO;
     _zooming = NO;
     static bool s_settleTraceInit = false;
@@ -2187,7 +2199,6 @@ void *Window_contentView(Window *window) {
     }
     if (s_settleTrace)
         NSLog(@"vk: live-resize settle %.0fx%.0f", [self frame].size.width, [self frame].size.height);
-    Window *w = windowHandleOf([self window]);
     if (w) {
         // Settle: release the live-resize gate so the NEXT present pass runs
         // one final caps-drift rebuild at
@@ -2209,13 +2220,14 @@ void *Window_contentView(Window *window) {
 
         if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
             // Restore exact 1:1 pinning BEFORE the final drawableSize lands:
-            // the stretched drag frame is replaced by the settle rebuild's
-            // exact-size present. TopLeft crops the last frozen drawable for
+            // the frozen drag frame is replaced by the settle rebuild's
+            // exact-size present. TopLeft pins the last frozen drawable for
             // the one-frame gap between settle and rebuild — never stretches.
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
             [(CAMetalLayer*) [self layer] setContentsGravity:kCAGravityTopLeft];
-            // Worker-owned present resumes transaction commits at settle.
+            // Reassert the YES that persisted since makeBackingLayer (idempotent:
+            // neither drag, zoom, nor fullscreen ever clears it now).
             [(CAMetalLayer*) [self layer] setPresentsWithTransaction:YES];
             [CATransaction commit];
         }
@@ -2256,30 +2268,33 @@ void *Window_contentView(Window *window) {
     if (w)
         atomic_store_explicit(&(*w).liveResizing, true, memory_order_relaxed);
 
-    // Board-contract twin: window-sized Metal boards stretch with the drag
-    // (Resize gravity, transaction-decoupled presents) while fixed child
-    // panes stay TopLeft-pinned. Restored in settleAfterResize.
+    // Board-contract twin: window-sized Metal boards keep their exact-size
+    // drawable TopLeft-pinned through the drag (freeze-exact — never Resize)
+    // while fixed child panes stay TopLeft-pinned. Reasserted at settle.
     extern void PanelCocoa_setLiveResizingAll(bool live);
     PanelCocoa_setLiveResizingAll(true);
 
-    // GAP-FREE DRAG: while the board swapchain stays at its frozen extent,
-    // stretch the last presented frame to cover the LIVE bounds every drag
-    // step (kCAGravityResize). TopLeft would pin the old frame and expose an
-    // empty gorge beyond the frozen extent as the window grows — the visible
-    // "resize delay"/gap. The panes (separate CALayer sublayers) are not
-    // affected by this gravity; they keep animating in place, and the settle
-    // rebuild replaces the stretched frame with an exact TopLeft one.
-    // Pane anchoring during the drag is WindowServer-accelerated: their
-    // autoresizingMask + anchorPoint (PanelCocoa_setAnchors) make CA move the
-    // sublayers inside the window-resize transaction, edge-locked, no per-event
-    // CPU frames (Window_compositePanes early-returns while live).
+    // FREEZE-EXACT DRAG: the board swapchain stays at its frozen extent and
+    // its gravity stays TopLeft, so the last presented frame keeps its exact
+    // pre-drag pixels pinned top-left every drag step — zero stretch. The
+    // seam beyond the frozen extent is the board's transparent (opaque=NO)
+    // remainder: blur / window background shows through as the window grows.
+    // This is the "empty gorge" trade-off the old Resize gravity hid: the
+    // frozen frame does NOT cover the growing bounds, but it also never
+    // smears. The settle rebuild replaces the frozen frame with an exact
+    // TopLeft one at the true final size. The panes (separate CALayer
+    // sublayers) are not affected by this gravity; they keep animating in
+    // place. Pane anchoring during the drag is WindowServer-accelerated:
+    // their autoresizingMask + anchorPoint (PanelCocoa_setAnchors) make CA
+    // move the sublayers inside the window-resize transaction, edge-locked,
+    // no per-event CPU frames (Window_compositePanes early-returns while live).
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
+        // YES persists from makeBackingLayer through the drag: the worker
+        // commits its own explicit transaction per present walk, so YES
+        // presents release on worker cadence with no thread-0 dependency.
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        [(CAMetalLayer*) [self layer] setContentsGravity:kCAGravityResize];
-        // Worker-owned present must not defer to thread-0 transaction commits
-        // during drag; steady-state contract unchanged.
-        [(CAMetalLayer*) [self layer] setPresentsWithTransaction:NO];
+        [(CAMetalLayer*) [self layer] setContentsGravity:kCAGravityTopLeft];
         [CATransaction commit];
     }
 
@@ -2342,20 +2357,11 @@ void *Window_contentView(Window *window) {
     atomic_store_explicit(&(*w).cachedWidth, (int) newSize.width, memory_order_relaxed);
     atomic_store_explicit(&(*w).cachedHeight, (int) newSize.height, memory_order_relaxed);
 
-    if (_liveResizing || _zooming || _fullScreenTransitioning || Window_isLiveResizing(w) || [[self window] inLiveResize]) {
-        // LIVE DRAG / ZOOM / FULLSCREEN: freeze the board drawableSize — swapchain stays a
-        // fixed pixel grid while WindowServer composites pane layer-frame moves
-        // at full rate. The final size lands in settleAfterResize.
-        _pendingSize.width = newSize.width;
-        _pendingSize.height = newSize.height;
-        return;
-    }
-
     Panel *contentPanel = atomic_load_explicit(&(*w).contentPanel, memory_order_acquire);
     if (contentPanel) {
         extern void Darling_setPanelSize(Panel *p, float w, float h);
         Darling_setPanelSize(contentPanel, (float)newSize.width, (float)newSize.height);
-        Window_compositePanes(w, contentPanel);
+        Window_compositeBoards(w);
     }
 
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
@@ -2443,7 +2449,8 @@ void Window_setGravityTopLeft(Window *window) {
     // the common case. Safety: capture the NSWindow STRONGLY and resolve
     // the live C handle inside the block, so a window destroyed between
     // enqueue and execution cannot dangle. During live resize (Rule 11.6)
-    // the drag owns Resize gravity; we must NOT reassert TopLeft mid-drag.
+    // the drag already pins TopLeft (freeze-exact); the gate skips the
+    // redundant CA reapplication mid-drag so the tracking loop stays clean.
     if (!window)
         return;
     @autoreleasepool {
@@ -2454,4 +2461,31 @@ void Window_setGravityTopLeft(Window *window) {
                 applyLayerGravity(live);
         });
     }
+}
+
+// Worker present transaction: explicit CoreAnimation commit per board+pane
+// walk. The present worker owns no runloop, so its implicit transaction
+// never commits at idle and every presentsWithTransaction=YES drawable
+// would stall behind it (freeze-at-idle). Wrapping one walk
+// (Vk_clearPresent + VkPane_presentAll) in Begin/End releases YES-presents
+// on worker cadence — which is exactly why layers can stay YES from
+// makeBackingLayer through drag, zoom, and fullscreen. Gravity untouched:
+// TopLeft at all times (freeze-exact steady-state AND mid-drag), owned by
+// thread 0.
+void Window_workerPresentBegin(void) {
+    if (s_workerPresentArmed)
+        return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    s_workerPresentArmed = true;
+}
+
+void Window_workerPresentEnd(void) {
+    if (!s_workerPresentArmed)
+        return;
+    [CATransaction commit];
+    s_workerPresentArmed = false;
+#ifndef NDEBUG
+    NSLog(@"vk: worker present committed (board+pane walk)");
+#endif
 }
