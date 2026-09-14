@@ -168,16 +168,16 @@ bool Kernel_isRunning(const Kernel *self) {
 // --- PRESENT WORKER (thread-1 GUI mode) -----------------------------------
 // The two-thread live-resize contract: thread 0 owns the OS event pump and
 // the AppKit live-resize tracking loop, and this worker owns ALL
-// presentation — board swapchain first, then every pane chain — so the four
-// scenes KEEP ANIMATING while the user drags the window (thread 0 is inside
-// the modal tracking loop; it cannot present). Vk_clearPresent is self-paced
-// by the FIFO present semaphore; the loop is purely a render/present pump.
+// presentation — demand propagation, retained layers, board swapchain first,
+// then every pane chain — so scenes KEEP ANIMATING while the user drags the
+// window (thread 0 is inside the modal tracking loop; its tick cannot
+// present). Demand is re-armed here every poll (bool stores only, Rule 35
+// hot-minimal), so immediate-on-demand survives a stalled tick.
 // Pacing: fence-paced healthy path, budget-paced every path, never bare spin.
-// After each pass (Vk_clearPresent + VkPane_presentAll), pace with nanosleep
-// to a ~16.6ms frame budget. Track consecutive failed passes (both present
-// calls failing/not-ready); on >=2 consecutive failures sleep 8ms instead of
-// remainder. Reset counter on any success. The sleep executes OUTSIDE any
+// Clean chains skip inside VkPane_presentAll, so idle rests at 0 presents
+// while the poll itself stays cheap. The sleep executes OUTSIDE any
 // Vk_ready() guard so the worker yields CPU to thread 0 even when Vulkan is
+// not ready.
 // Thread 1: Retained scene manager worker.
 // Runs offscreen scene rendering (VkLayer_visit) for retained scenes,
 // allowing scenes to update continuously in the background.
@@ -195,8 +195,31 @@ static void kernel_present_job(Thread *selfThread, void *task) {
         clock_gettime(CLOCK_MONOTONIC, &start);
 
         if (Vk_ready()) {
-            // Render dirty retained scene targets offscreen
-            VkLayer_visit();
+            Window *w = nullptr;
+            if ((*self).applicationCount > 0 && (*self).applications[0] != nullptr)
+                w = Application_getWindow((*self).applications[0], 0);
+            if (w != nullptr) {
+                Panel *content = Window_getContentPanel(w);
+                if (content != nullptr) {
+                    extern void Darling_propagatePaneDirty(Window *window, Panel *contentPanel);
+                    Darling_propagatePaneDirty(w, content);
+                }
+                // Render dirty retained scene targets offscreen
+                VkLayer_visit();
+            }
+#ifdef __APPLE__
+            // Explicit per-walk transaction: the worker owns no runloop, so
+            // YES-presents release here instead of stalling for thread 0.
+            Window_workerPresentBegin();
+#endif
+            if (VkPane_count() == 0) {
+                Vk_clearPresent();
+            } else {
+                VkPane_presentAll();
+            }
+#ifdef __APPLE__
+            Window_workerPresentEnd();
+#endif
         }
 
         struct timespec end;
@@ -262,8 +285,14 @@ bool Kernel_tick(Kernel *self, double dt) {
         return false;
     }
 
-    // 5. Presentation pass — owned by Thread 0 (Main Thread).
-    // Presents synchronously with WindowServer via CATransaction for presentsWithTransaction=YES.
+    // 5. Layout/attach pass — owned by Thread 0 (Main Thread).
+    // preFrame mutates layer ownership and layout, which is thread-0-only
+    // (Rule 11.6). Presentation runs on the present worker
+    // (kernel_present_job), so immediate-on-demand demand survives the modal
+    // live-resize loop that parks this tick. Direct Kernel_tick callers with
+    // no worker spawned (tests) present inline as the legacy single-thread
+    // path. Presents synchronously with WindowServer via CATransaction for
+    // presentsWithTransaction=YES.
     if (Vk_ready()) {
         if ((*self).applicationCount > 0 && (*self).applications[0]) {
             Window *w = Application_getWindow((*self).applications[0], 0);
@@ -274,17 +303,19 @@ bool Kernel_tick(Kernel *self, double dt) {
                 Darling_preFrame(w, winW, winH, nullptr);
             }
         }
+        if (!(*self).presentWorker) {
 #ifdef __APPLE__
-        Window_workerPresentBegin();
+            Window_workerPresentBegin();
 #endif
-        if (VkPane_count() == 0) {
-            Vk_clearPresent();
-        } else {
-            VkPane_presentAll();
+            if (VkPane_count() == 0) {
+                Vk_clearPresent();
+            } else {
+                VkPane_presentAll();
+            }
+#ifdef __APPLE__
+            Window_workerPresentEnd();
+#endif
         }
-#ifdef __APPLE__
-        Window_workerPresentEnd();
-#endif
     }
 
     return true;

@@ -1003,7 +1003,9 @@ void Window_pollEvents(void) {
             // Resize-cadence bridge: geometry moved this pass -> hand thread
             // 0's fresh caches straight to the compositor renderer. Runs
             // INSIDE AppKit's event servicing, at the OS's own rhythm.
-            if (rectChanged && (*handle).resizeRenderFn)
+            // Live-gated (Rule 11.6): mid-drag the settle pass owns the one
+            // rebuild — per-step GPU work here would stall edge tracking.
+            if (rectChanged && (*handle).resizeRenderFn && !Window_isLiveResizing(handle))
                 (*(*handle).resizeRenderFn)((*handle).resizeRenderUserdata);
 
             // Child panes: attach/position child CALayers on the content view
@@ -2363,6 +2365,16 @@ void *Window_contentView(Window *window) {
         Darling_setPanelSize(contentPanel, (float)newSize.width, (float)newSize.height);
         Window_compositeBoards(w);
     }
+
+    // LIVE-RESIZE CONTRACT (Rule 11.6): mid-drag thread 0 moves CALayer
+    // frames only (above). Swapchain rebuilds and synchronous render hooks
+    // are settle-only — per-drag-pixel GPU work is the size-proportional-lag
+    // defect. settleAfterResize owns the one rebuild + one re-render.
+    BOOL live = [self window] ? [[self window] inLiveResize] : NO;
+    if (!live)
+        live = _liveResizing || _fullScreenTransitioning;
+    if (live)
+        return;
 
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
         CAMetalLayer *metal = (CAMetalLayer*) [self layer];
