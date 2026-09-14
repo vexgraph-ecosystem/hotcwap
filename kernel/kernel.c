@@ -1,5 +1,6 @@
 #include "kernel/kernel.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -54,9 +55,12 @@
  *
  * Core Functions:
  *   - Kernel_destroy(self)
+ *   - Kernel_free(self)
  *   - Kernel_stop(self)
  *   - Kernel_isRunning(self)
- *   - Kernel_run(self)
+ *   - Kernel_runAll(self)
+ *   - Kernel_runOne(self, app)
+ *   - Kernel_run(...)                 (arity macro: 1 arg -> runAll, 2 args -> runOne)
  *   - Kernel_tick(self, dt)
  *   - Kernel_addApplication(self, app)
  *   - Kernel_removeApplication(self, app)
@@ -105,9 +109,14 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
 }
 
 // CORE FUNCTIONS
-void Kernel_destroy(Kernel *self) {
+bool Kernel_free(Kernel *self) {
     if (!self)
-        return;
+        return false;
+    if ((*self).applicationCount > 0) {
+        fprintf(stderr, "kernel: %u applications still registered; remove before free\n",
+                (*self).applicationCount);
+        return false;
+    }
     Kernel_stop(self);
 
     // Bounded wait for worker threads to observe running = false (Rule 27)
@@ -130,6 +139,13 @@ void Kernel_destroy(Kernel *self) {
     if (arena)
         MemoryArena_destroy(arena);
     free(self);
+    return true;
+}
+
+void Kernel_destroy(Kernel *self) {
+    if (!self)
+        return;
+    (void) Kernel_free(self);
 }
 
 void Kernel_stop(Kernel *self) {
@@ -162,47 +178,25 @@ bool Kernel_isRunning(const Kernel *self) {
 // calls failing/not-ready); on >=2 consecutive failures sleep 8ms instead of
 // remainder. Reset counter on any success. The sleep executes OUTSIDE any
 // Vk_ready() guard so the worker yields CPU to thread 0 even when Vulkan is
-// not ready.
+// Thread 1: Retained scene manager worker.
+// Runs offscreen scene rendering (VkLayer_visit) for retained scenes,
+// allowing scenes to update continuously in the background.
 static void kernel_present_job(Thread *selfThread, void *task) {
     (void) selfThread;
     Kernel *self = (Kernel*) task;
     if (!self)
         return;
 
-    uint32_t consecutiveFailures = 0;
     const uint64_t frameBudgetNs = 16666667ULL; // ~60fps
     const uint64_t minSleepNs = 1000000ULL;     // 1ms floor
-    const uint64_t backoffSleepNs = 8000000ULL; // 8ms backoff
 
     while (atomic_load_explicit(&(*self).running, memory_order_relaxed)) {
         struct timespec start;
         clock_gettime(CLOCK_MONOTONIC, &start);
 
-        bool anySuccess = false;
         if (Vk_ready()) {
-#ifdef __APPLE__
-            // Explicit per-walk transaction: the worker owns no runloop, so
-            // YES-presents release here instead of stalling for thread 0.
-            Window_workerPresentBegin();
-#endif
-            if (Vk_clearPresent())
-                anySuccess = true;
-            // Retained offscreen layers render themselves first (dirty only),
-            // then panes — same-queue FIFO means the board pass that samples
-            // them later reads finished slots (Rule 14 composite != render).
-            if (VkLayer_visit())
-                anySuccess = true;
-            if (VkPane_presentAll())
-                anySuccess = true;
-#ifdef __APPLE__
-            Window_workerPresentEnd();
-#endif
-        }
-
-        if (anySuccess) {
-            consecutiveFailures = 0;
-        } else {
-            consecutiveFailures++;
+            // Render dirty retained scene targets offscreen
+            VkLayer_visit();
         }
 
         struct timespec end;
@@ -210,16 +204,9 @@ static void kernel_present_job(Thread *selfThread, void *task) {
         uint64_t elapsedNs = (uint64_t)(end.tv_sec - start.tv_sec) * 1000000000ULL
                            + (uint64_t)(end.tv_nsec - start.tv_nsec);
 
-        uint64_t sleepNs = 0;
-        if (consecutiveFailures >= 2) {
-            sleepNs = backoffSleepNs;
-        } else if (elapsedNs < frameBudgetNs) {
-            sleepNs = frameBudgetNs - elapsedNs;
-            if (sleepNs < minSleepNs)
-                sleepNs = minSleepNs;
-        } else {
+        uint64_t sleepNs = (elapsedNs < frameBudgetNs) ? (frameBudgetNs - elapsedNs) : minSleepNs;
+        if (sleepNs < minSleepNs)
             sleepNs = minSleepNs;
-        }
 
         struct timespec ts = { 0, (long)sleepNs };
         nanosleep(&ts, nullptr);
@@ -275,26 +262,39 @@ bool Kernel_tick(Kernel *self, double dt) {
         return false;
     }
 
-    // 5. Presentation pass — owned by the present worker when Kernel_run
-    // spawned one (two-thread live-resize contract: the worker keeps
-    // presenting the board + panes while thread 0 pumps the drag). The
-    // legacy single-thread path (direct Kernel_tick callers, tests) still
-    // presents here. Rule 14: panes render only into their own chains; the
-    // board never shows them.
-    if (Vk_ready() && !(*self).presentWorker) {
-        Vk_clearPresent();
-        VkLayer_visit();
-        VkPane_presentAll();
+    // 5. Presentation pass — owned by Thread 0 (Main Thread).
+    // Presents synchronously with WindowServer via CATransaction for presentsWithTransaction=YES.
+    if (Vk_ready()) {
+        if ((*self).applicationCount > 0 && (*self).applications[0]) {
+            Window *w = Application_getWindow((*self).applications[0], 0);
+            if (w) {
+                extern void Darling_preFrame(Window *window, int drawW, int drawH, void *userdata);
+                int winW = Window_width(w);
+                int winH = Window_height(w);
+                Darling_preFrame(w, winW, winH, nullptr);
+            }
+        }
+#ifdef __APPLE__
+        Window_workerPresentBegin();
+#endif
+        if (VkPane_count() == 0) {
+            Vk_clearPresent();
+        } else {
+            VkPane_presentAll();
+        }
+#ifdef __APPLE__
+        Window_workerPresentEnd();
+#endif
     }
 
     return true;
 }
 
-int Kernel_run(Kernel *self) {
+int Kernel_runAll(Kernel *self) {
     if (!self)
-        return -1;
+        return KERNEL_EXIT_NO_APPS;
     if ((*self).applicationCount == 0)
-        return 0;
+        return KERNEL_EXIT_OK;
     atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
 
     // Warm up / start registered applications
@@ -375,7 +375,14 @@ int Kernel_run(Kernel *self) {
         (*self).presentWorker = NULL;
     }
 
-    return 0;
+    return KERNEL_EXIT_OK;
+}
+
+int Kernel_runOne(Kernel *self, Application *app) {
+    if (!self || !app)
+        return KERNEL_EXIT_NO_APPS;
+    (void) Kernel_addApplication(self, app);
+    return Kernel_runAll(self);
 }
 
 bool Kernel_addApplication(Kernel *self, Application *app) {

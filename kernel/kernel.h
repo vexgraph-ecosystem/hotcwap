@@ -19,8 +19,12 @@
 //
 // Lifecycle (vk_test order):
 //   kernel -> application -> Kernel_addApplication -> window ->
-//   Application_addWindow -> Application_run -> Application_free ->
-//   Kernel_destroy.
+//   Application_addWindow -> Kernel_run(kernel) -> Kernel_removeApplication ->
+//   Application_free -> Kernel_free.
+//
+// Kernel_run is the SOLE blocking entry: Application exposes start/tick/stop
+// only and never blocks. Kernel_free refuses (false + stderr warn) while any
+// application is still registered — remove them first per Rule 26.
 //
 // Ownership law: Kernel REGISTERS applications and multiplexes their
 // non-blocking ticks via Kernel_tick / Kernel_run on Thread 0.
@@ -30,6 +34,10 @@
 #define KERNEL_MAX_APPS 8
 #define KERNEL_ARENA_DEFAULT (64 * 1024 * 1024)
 #define KERNEL_TRANSIENT_DEFAULT (64 * 1024 * 1024)
+
+// Process exit codes returned by the Kernel_run entry.
+#define KERNEL_EXIT_OK 0
+#define KERNEL_EXIT_NO_APPS -1
 
 typedef struct Kernel Kernel;
 
@@ -63,16 +71,36 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes);
 )(__VA_ARGS__)
 
 // Free supervision AFTER all applications and windows are gone.
-// Stops every app, resets transient arena, destroys master arena LAST,
-// then frees the Kernel struct. Never call while any Application_run loop
-// or present worker is still active — stop those first (Rule 27 bounded).
+// Guarded (Rule 26): returns false plus an stderr warn while any application
+// is still registered — Kernel_removeApplication first, then retry. Frees the
+// transient arena, then the master arena LAST, then the Kernel struct.
+// Never call while any present worker is still active (Rule 27 bounded).
+bool Kernel_free(Kernel *self);
+
+// Legacy shim over Kernel_free: kept so existing callers link without edits.
+// Warns-and-leaks (returns void) when the registry is non-empty instead of
+// force-clearing it — prefer Kernel_free and check the result.
 void Kernel_destroy(Kernel *self);
 
 // --- Supervisor state & execution ---
 bool Kernel_isRunning(const Kernel *self);
 void Kernel_stop(Kernel *self);
-int  Kernel_run(Kernel *self);
+// SOLE blocking entry, arity-overloaded:
+//   Kernel_run(kernel)          -> run all registered applications
+//   Kernel_run(kernel, app)     -> add-if-absent, then run (same multiplex
+//                                  pass — siblings still tick, never a private
+//                                  loop; the filter only selects the exit code
+//                                  owner's completion is NOT awaited alone).
+int  Kernel_runAll(Kernel *self);
+int  Kernel_runOne(Kernel *self, Application *app);
 bool Kernel_tick(Kernel *self, double dt);
+
+#define KERNEL_RUN_CHOOSER(_0, _1, _2, NAME, ...) NAME
+
+#define Kernel_run(...) KERNEL_RUN_CHOOSER( \
+    dummy __VA_OPT__(,) __VA_ARGS__, \
+    Kernel_runOne, Kernel_runAll \
+)(__VA_ARGS__)
 
 // --- Application registry (multi-app, N apps x M windows per process) ---
 // Register a live application. False on NULL, duplicate, or full registry.
