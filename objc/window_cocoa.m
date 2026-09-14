@@ -19,10 +19,13 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
+#import <MetalKit/MetalKit.h>
 #import <stdatomic.h>
 
 #include "buffer/color_buffer.h"
 #include "window/window.h"
+#include "vulkan/graphics_layer.h"
+#include "graphvex/gfx_loop.h"
 // NOTE: no darling/panel.h here on purpose — it transitively typedefs
 // `Collection`, which collides with CarbonCore under AppKit imports. This
 // file only stores Panel pointers (opaque slots), never dereferences them;
@@ -47,7 +50,7 @@
   * ----------------------------------------------------------------------------
   *   NSWindow *nsWindow;                      // AppKit window (we own it)
   *   WindowDelegate *delegate;            // per-window close/focus delegate
-  *   bool shouldClose;                        // true once close requested
+  *   _Atomic bool shouldClose;                // true once close requested (Thread 0 writes, park reads)
   *   uint32_t id;                             // engine window id (1..7, 0 = broadcast)
   *   _Atomic uint64_t sizeGeneration;         // resize-reflection counter (thread 0 bumps)
   *   _Atomic int cachedWidth;                 // content width at last thread-0 pump
@@ -59,9 +62,11 @@
   *   _Atomic int presentMode;                 // present pacing (FIFO/IMMEDIATE)
   *   _Atomic bool transparent;                // composite transparency request
   *   _Atomic uint64_t renderGeneration;       // policy-reflection counter (swapchain rebuild)
-  *   _Atomic(Panel*) container;               // content root (nullptr = clear-only pass)
-  *   _Atomic(Panel*) contentPanel;            // UI tree (board or child panes when native)
-  *   _Atomic(Panel*) scenePanel;              // scene tree (Vulkan-backed)
+ *   _Atomic(Panel*) container;               // content root (nullptr = clear-only pass)
+ *   _Atomic(Panel*) contentPanel;            // UI tree (board or child panes when native)
+ *   _Atomic(Panel*) scenePanel;              // scene tree (Vulkan-backed)
+ *   _Atomic(void*) topLayer;                 // content board layer (graphvex-owned, parenting only here)
+ *   _Atomic(void*) bottomLayer;              // scene board layer (graphvex-owned, parenting only here)
   *   _Atomic bool enabled;                    // false mutes ALL OS input
   *   bool lastFocused;                        // focus-flip detection during pump
   *   _Atomic uint32_t monitorId;              // CGDirectDisplayID mirror (0 = unmapped)
@@ -103,8 +108,11 @@
   *   - windowFireClose(window)
   *   - applyLayerGravity(window)
   *   - findVulkanView(window)                 : resolve VulkanView from contentView subviews
-  *   - Window_compositePanes(w, contentPanel)
-  *   - Window_compositeBoards(w)                : scene/content Metal boards
+ *   - Window_compositePanes(w, contentPanel)
+ *   - Window_compositeBoards(w)                : scene/content Metal boards
+ *   - Window_orderLayers(w)                    : blur back, bottom, top front
+ *   - windowBindTop(window, layer)             : seam forwarder to setTopLayer
+ *   - windowBindBottom(window, layer)          : seam forwarder to setBottomLayer
   *   - windowFireFocus(window, focused)
   *   - windowFireResized(window, width, height)
   *   - windowFireMoved(window, x, y)
@@ -165,6 +173,8 @@
  *   - Window_setContainer(window, root)
  *   - Window_setContentPanel(window, panel)
  *   - Window_setScenePanel(window, panel)
+ *   - Window_setTopLayer(window, layer)      // content board, store + order
+ *   - Window_setBottomLayer(window, layer)   // scene board, store + order
  *   - Window_setEnabled(window, enabled)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
@@ -177,7 +187,8 @@
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
- *   - Window_setBlur(window, blur)
+ *   - Window_setBlur(window, blur)       // rejected (console warn) while DECORATED;
+ *                                        // NAKED/BORDERLESS only, stripped on return to DECORATED
  *   - Window_setAlwaysOnTop(window, onTop)
  *   - Window_setClickThrough(window, clickThrough)
  *   - Window_setShadow(window, shadow)
@@ -197,6 +208,8 @@
  *   - Window_getContainer(window)
  *   - Window_getContentPanel(window)
  *   - Window_getScenePanel(window)
+ *   - Window_getTopLayer(window)             // nullptr = content board absent
+ *   - Window_getBottomLayer(window)          // nullptr = scene board absent
   *   - Window_getPanelLayer(window, panel)
   *   - Window_isEnabled(window)
  *   - hasStyleBit(window, bit)
@@ -285,7 +298,7 @@ static CGPoint s_lockCenter = {0, 0};
 struct Window {
     NSWindow *nsWindow;
     WindowDelegate *delegate;
-    bool shouldClose;
+    _Atomic bool shouldClose;
     uint32_t id;
     _Atomic uint64_t sizeGeneration;
     _Atomic int cachedWidth; // content width at last thread-0 pump (worker reads)
@@ -305,6 +318,11 @@ struct Window {
     _Atomic(Panel*) container;
     _Atomic(Panel*) contentPanel;  // UI tree (board-backed or child panes)
     _Atomic(Panel*) scenePanel;    // Scene tree (Vulkan-backed)
+
+    // --- graphics boards: opaque platform layers, graphvex-owned --
+    // Stored + parented here, never dereferenced. nullptr = board absent.
+    _Atomic(void*) topLayer;       // content board (UI canvas), parents front
+    _Atomic(void*) bottomLayer;    // scene board (3D viewport), parents mid
 
     // --- runtime state --
     _Atomic bool enabled;    // false mutes ALL OS input for this window
@@ -380,13 +398,13 @@ static Window *windowHandleOf(NSWindow *window) {
 // applicationShouldTerminateAfterLastWindowClosed lets the process end when
 // the last window goes away (normal for a game/engine run).
 @interface WindowAppDelegate : NSObject <NSApplicationDelegate>
-@property(nonatomic, assign) bool *shouldClosePtr;
+@property(nonatomic, assign) atomic_bool *shouldClosePtr;
 @end
 
 @implementation WindowAppDelegate
 - (void)applicationWillTerminate:(NSNotification*) notification {
     (void) notification;
-    if (self.shouldClosePtr) *self.shouldClosePtr = true;
+    if (self.shouldClosePtr) atomic_store_explicit(self.shouldClosePtr, true, memory_order_relaxed);
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*) sender {
     (void) sender;
@@ -400,17 +418,17 @@ static Window *windowHandleOf(NSWindow *window) {
 // window adapter. The pointers are (assign) because the delegate must not
 // own our C struct.
 @interface WindowDelegate : NSObject <NSWindowDelegate>
-@property(nonatomic, assign) bool *shouldClosePtr;
+@property(nonatomic, assign) atomic_bool *shouldClosePtr;
 @property(nonatomic, assign) Window *handlePtr;
 @end
 
 static void windowFireClose(Window *window);
 static void applyLayerGravity(Window *window);
 
-// VulkanView: Vulkan backing layer + live-resize / zoom bridge.
+// VulkanView: MTKView backing layer + live-resize / zoom bridge.
 // Full interface forward-declared here so the delegate can access zoom
 // accessors before the @implementation below.
-@interface VulkanView : NSView {
+@interface VulkanView : MTKView {
 @public
     BOOL _liveResizing;
     BOOL _zooming; // instant-zoom bridge: true between animationResizeTime + windowDidResize
@@ -429,7 +447,7 @@ static VulkanView *findVulkanView(NSWindow *window);
 @implementation WindowDelegate
 - (void) windowWillClose:(NSNotification*) notification {
     (void) notification;
-    if (self.shouldClosePtr) *self.shouldClosePtr = true;
+    if (self.shouldClosePtr) atomic_store_explicit(self.shouldClosePtr, true, memory_order_relaxed);
     if (self.handlePtr) windowFireClose(self.handlePtr);
 }
 
@@ -522,33 +540,18 @@ static VulkanView *findVulkanView(NSWindow *window);
     }
 }
 
-// Kill every animated frame change for this window. The OS's zoom animation
-// (double-click title bar) never renders in-process — WindowServer just scales
-// the window's stale committed bitmap between the two sizes, which reads as
-// smear/stretch no matter what the renderer does. Returning zero makes
-// setFrame:display:animate:YES land instantly: ONE real resize that the
-// TopLeft gravity law + resize-cadence bridge present honestly.
-//
-// Zoom bridge: set _zooming + Resize gravity so setFrameSize: freezes
-// drawableSize (no intermediate scales), then windowDidResize restores
-// TopLeft and applies the true final size in one shot.
-- (NSTimeInterval)window:(NSWindow*) window animationResizeTime:(NSRect)newFrame {
-    (void) newFrame;
-    (void) window;
-    return 0.0;
-}
+
 
 // Resize-cadence choke points, both thread 0, both feeding the SAME render
 // hook the pump uses:
-//   willResize fires BEFORE the proposed size applies — the hook drains the
-//   runway (fence retire / final old-size present), so the frozen drawable
-//   CA shows during the border step is fresh and exact-sized (TopLeft crops
-//   it, never stretches).
+//   willResize fires BEFORE the proposed size applies — caches pre-chase
+//   the incoming content size so the worker's next present already knows
+//   the new extent (TopLeft pins it, never stretches).
 //   didResize fires AFTER each applied step — extents have moved, so the
-//   blocking sync present lands the new size's frame inside the same runloop
-//   turn the border moved.
+//   drawable chase + layout + hook land inside the same runloop turn the
+//   border moved (Rule 11.6: every step, not just the settle).
 // Accept-always policy: return frameSize unchanged. Pacing lives in the
-// renderer's rebuild gate, not here.
+// worker's frame budget, not here.
 - (NSSize)windowWillResize:(NSWindow*) sender toSize:(NSSize)frameSize {
     (void) sender;
     Window *w = self.handlePtr;
@@ -570,17 +573,27 @@ static VulkanView *findVulkanView(NSWindow *window);
     atomic_store_explicit(&(*w).cachedHeight, (int)content.size.height, memory_order_relaxed);
 
     VulkanView *vulkanView = findVulkanView((*w).nsWindow);
-    // LIVE RESIZE / FULLSCREEN GATE: during an active mouse drag or fullscreen space transition,
-    // intermediate steps are handled by setFrameSize. viewDidEndLiveResize owns the final drag settle.
-    if ([(*w).nsWindow inLiveResize] || (vulkanView && (vulkanView->_liveResizing || vulkanView->_fullScreenTransitioning))) {
-        return;
+    // Rule 11.6 continuous resize: every applied step chases extents below.
+    // setFrameSize owns the per-step chase while a VulkanView exists (it
+    // fires first, same runloop turn); didResize covers the steps it never
+    // sees (bare window, programmatic, zoom) plus the one true settle.
+    // Settle runs ONLY off-drag: mid-drag it would clear the live gate and
+    // fight the tracking loop for the final rebuild.
+    bool inLiveDrag = [(*w).nsWindow inLiveResize]
+        || (vulkanView && (vulkanView->_liveResizing || vulkanView->_fullScreenTransitioning));
+    bool liveOwned = inLiveDrag && vulkanView != nil;
+    if (!liveOwned) {
+        if (!inLiveDrag && vulkanView) {
+            [vulkanView settleAfterResize];
+        }
     }
 
-    if (vulkanView) {
-        [vulkanView settleAfterResize];
-    }
-
-    // Programmatic / zoom resize settle pass
+    // Live extent chase: runs on every covered step (Rule 11.6) — drawable
+    // tracks live bounds in native pixels, layout + hook follow. Deliberately
+    // outside the liveOwned gate above: that gate owns the settle ONLY.
+    // (Mid-drag with a VulkanView, setFrameSize chases first in the same
+    // turn; this pass re-asserts idempotently — same sizes, try-locked
+    // presents — so bare/programmatic steps are never orphaned.)
     if (vulkanView && [[vulkanView layer] isKindOfClass:[CAMetalLayer class]]) {
         CGFloat scale = [(*w).nsWindow backingScaleFactor];
         if (scale <= 0.0)
@@ -911,8 +924,16 @@ void Window_pollEvents(void) {
     // modal loop commits continuously, the idle pump does not). One explicit
     // commit per tick releases worker + board presents on frame cadence and
     // batches this pass's layer mutations into the same vsync. Empty at
-    // idle = negligible cost. Never runs during a drag (the modal tracking
-    // loop owns thread 0 then), so the live-resize NO-contract is untouched.
+    // idle = negligible cost.
+    //
+    // Drag discipline: the transaction is NEVER held open across sendEvent.
+    // A live-resize drag enters AppKit's modal tracking loop INSIDE sendEvent
+    // and blocks thread 0 until mouse-up; an open outer transaction would
+    // collect every native layer frame (blur view, content view) into one
+    // commit at mouse-up — freezing the window mid-drag (Rule 11.6). Each
+    // event therefore commits+rebegins around its dispatch, so the tracking
+    // loop always runs with NO outer transaction and AppKit commits every
+    // native drag step on its own runloop turn.
     [CATransaction begin];
     @autoreleasepool {
         NSEvent *event;
@@ -921,7 +942,9 @@ void Window_pollEvents(void) {
                                                inMode:NSDefaultRunLoopMode
                                               dequeue:YES])) {
             routeEvent(event);
+            [CATransaction commit];
             [NSApp sendEvent:event];
+            [CATransaction begin];
         }
         [NSApp updateWindows];
         recenterIfLocked();
@@ -1003,9 +1026,9 @@ void Window_pollEvents(void) {
             // Resize-cadence bridge: geometry moved this pass -> hand thread
             // 0's fresh caches straight to the compositor renderer. Runs
             // INSIDE AppKit's event servicing, at the OS's own rhythm.
-            // Live-gated (Rule 11.6): mid-drag the settle pass owns the one
-            // rebuild — per-step GPU work here would stall edge tracking.
-            if (rectChanged && (*handle).resizeRenderFn && !Window_isLiveResizing(handle))
+            // Rule 11.6: ungated — every move renders at the OS's rhythm,
+            // mid-drag or settled; the worker keeps presenting between ticks.
+            if (rectChanged && (*handle).resizeRenderFn)
                 (*(*handle).resizeRenderFn)((*handle).resizeRenderUserdata);
 
             // Child panes: attach/position child CALayers on the content view
@@ -1036,9 +1059,9 @@ void Window_pollEvents(void) {
                     extern int VkPane_count(void);
                     uint64_t presents = 0, skips = 0;
                     int panes = VkPane_count();
-                    for (int pi = 0; pi < panes; pi++) {
-                        presents += VkPane_presentCount(pi);
-                        skips += VkPane_skipCount(pi);
+                    for (int p = 0; p < panes; p++) {
+                        presents += VkPane_presentCount(p);
+                        skips += VkPane_skipCount(p);
                     }
                     NSLog(@"vk:probe frame=%.0fx%.0f content=%dx%d gravity=%@ drawable=%.0fx%.0f panes=%d presents=%llu skips=%llu",
                           [(*handle).nsWindow frame].size.width,
@@ -1057,6 +1080,8 @@ void Window_pollEvents(void) {
 // Build the NSWindow + C handle. Shared by every constructor. The window is
 // created HIDDEN — visibility is an explicit Window_show() decision, so
 // construct -> mutate -> show never flashes a half-configured window.
+static void windowBindTop(void *window, void *layer);
+static void windowBindBottom(void *window, void *layer);
 static Window *windowAlloc(const WindowDesc *desc) {
     @autoreleasepool {
         if (!NSApp) {
@@ -1067,6 +1092,15 @@ static Window *windowAlloc(const WindowDesc *desc) {
             [NSApp setDelegate:sAppDelegate];
             [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
             [NSApp activateIgnoringOtherApps:YES];
+        }
+
+        // Graphics bind seam: installed once per process so the graphics
+        // side (graphvex GraphicsLayer_bindWindow) can drive board attaches.
+        // Idempotent — reinstalling the same forwarders is a no-op.
+        static bool s_graphicsBindInstalled = false;
+        if (!s_graphicsBindInstalled) {
+            s_graphicsBindInstalled = true;
+            GraphicsLayer_installWindowBind(windowBindTop, windowBindBottom);
         }
 
         NSRect frame = NSMakeRect(0, 0, (CGFloat)(*desc).width, (CGFloat)(*desc).height);
@@ -1105,7 +1139,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         Window *w = (Window*) calloc(1, sizeof(Window));
         (*w).nsWindow = window;
         (*w).delegate = delegate;
-        (*w).shouldClose = false;
+        atomic_store_explicit(&(*w).shouldClose, false, memory_order_relaxed);
         atomic_store_explicit(&(*w).sizeGeneration, 0, memory_order_relaxed);
         NSRect initialContent = [window contentRectForFrameRect:[window frame]];
         atomic_store_explicit(&(*w).cachedWidth, (int)initialContent.size.width, memory_order_relaxed);
@@ -1122,6 +1156,8 @@ static Window *windowAlloc(const WindowDesc *desc) {
         atomic_store_explicit(&(*w).transparent, false, memory_order_relaxed);
         atomic_store_explicit(&(*w).renderGeneration, 0, memory_order_relaxed);
         atomic_store_explicit(&(*w).container, nullptr, memory_order_relaxed);
+        atomic_store_explicit(&(*w).topLayer, nullptr, memory_order_relaxed);
+        atomic_store_explicit(&(*w).bottomLayer, nullptr, memory_order_relaxed);
         atomic_store_explicit(&(*w).enabled, true, memory_order_relaxed);
         (*w).lastFocused = false;
         atomic_store_explicit(&(*w).monitorId, 0, memory_order_relaxed);
@@ -1191,7 +1227,7 @@ void Window_destroy(Window *window) {
         if (sPendingKeyWindow == (*window).nsWindow)
             sPendingKeyWindow = nil;
         [(*window).nsWindow setDelegate:nil];   // detach: no callbacks into freed struct
-        if (!(*window).shouldClose) {
+        if (!atomic_load_explicit(&(*window).shouldClose, memory_order_relaxed)) {
             [(*window).nsWindow close];
         }
         // Drop the id and any listeners still scoped to it so nothing dangles.
@@ -1204,7 +1240,7 @@ void Window_destroy(Window *window) {
 }
 
 bool Window_shouldClose(Window *window) {
-    return window ? (*window).shouldClose : true;
+    return window ? atomic_load_explicit(&(*window).shouldClose, memory_order_relaxed) : true;
 }
 
 // --- Present policy -----------------------------------------------------------
@@ -1276,6 +1312,95 @@ Panel *Window_getScenePanel(const Window *window) {
     return window ? atomic_load_explicit(&(*window).scenePanel, memory_order_acquire) : nullptr;
 }
 
+// --- Graphics boards seam forwarders (graphvex-driven bind) ----------------
+// The bind seam speaks void* window handles (graphvex can never see the
+// Window type per Rule 17), so these two static forwarders re-type the
+// handle and delegate to the real setters. Installed once per process from
+// windowAlloc; the ONLY sanctioned attach path is
+// GraphicsLayer_bindWindow (typed + typeId-gated) — raw Window_setTopLayer
+// / setBottomLayer are internal (kept public for ABI compat only).
+static void windowBindTop(void *window, void *layer) {
+    Window_setTopLayer((Window*) window, layer);
+}
+
+static void windowBindBottom(void *window, void *layer) {
+    Window_setBottomLayer((Window*) window, layer);
+}
+
+// --- Graphics boards: opaque platform layers, graphvex-owned ----------------
+// The decoupled stack: this file stores + parents the two board handles and
+// NOTHING else. Creation, device, drawableSize, and destruction all live in
+// graphvex (GraphicsLayer). Setters re-assert order so a newly attached
+// board can never strand on the wrong side of its sibling.
+
+void Window_setBottomLayer(Window *window, void *layer) {
+    if (!window)
+        return;
+    atomic_store_explicit(&(*window).bottomLayer, layer, memory_order_release);
+    Window_orderLayers(window);
+}
+
+void *Window_getBottomLayer(const Window *window) {
+    if (!window)
+        return nullptr;
+    return atomic_load_explicit(&(*window).bottomLayer, memory_order_acquire);
+}
+
+void Window_setTopLayer(Window *window, void *layer) {
+    if (!window)
+        return;
+    atomic_store_explicit(&(*window).topLayer, layer, memory_order_release);
+    Window_orderLayers(window);
+}
+
+void *Window_getTopLayer(const Window *window) {
+    if (!window)
+        return nullptr;
+    return atomic_load_explicit(&(*window).topLayer, memory_order_acquire);
+}
+
+// Stack order, bottom-to-top: NSWindow -> blur view -> bottomLayer (scene)
+// -> topLayer (content). The blur view is an AppKit subview (always behind
+// sublayers of the same view), so only the two board layers need explicit
+// ordering here. Idempotent: re-assert every pass. Thread 0 only —
+// off-thread callers bounce to the main queue and return.
+void Window_orderLayers(Window *window) {
+    if (!window)
+        return;
+    if (![NSThread isMainThread]) {
+        NSWindow *nsw = (*window).nsWindow;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            Window *live = windowHandleOf(nsw);
+            if (live)
+                Window_orderLayers(live);
+        });
+        return;
+    }
+    @autoreleasepool {
+        NSView *contentView = [(*window).nsWindow contentView];
+        if (!contentView)
+            return;
+        CALayer *rootLayer = [contentView layer];
+        if (!rootLayer)
+            return;
+        void *bottom = atomic_load_explicit(&(*window).bottomLayer, memory_order_acquire);
+        void *top = atomic_load_explicit(&(*window).topLayer, memory_order_acquire);
+        if (!bottom && !top)
+            return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        CALayer *bottomLayer = (__bridge CALayer*) bottom;
+        CALayer *topLayer = (__bridge CALayer*) top;
+        if (bottomLayer && [bottomLayer superlayer] != rootLayer)
+            [rootLayer addSublayer:bottomLayer];
+        if (topLayer && [topLayer superlayer] != rootLayer)
+            [rootLayer addSublayer:topLayer];
+        if (bottomLayer && topLayer)
+            [rootLayer insertSublayer:bottomLayer below:topLayer];
+        [CATransaction commit];
+    }
+}
+
 // --- Metal pane bridge (C callable from renderer) ------------------------
 //
 // Child-iteration logic lives in panel_bridge.c (a pure-C file that can
@@ -1304,19 +1429,6 @@ void *Window_getPanelLayer(Window *window, Panel *panel) {
 
 void Window_compositePanes(Window *window, Panel *contentPanel) {
     if (!window || !contentPanel) return;
-
-    // LIVE-RESIZE CONTRACT (Rule 11.6): while the window is being dragged,
-    // pane/corner layers are anchored by CoreAnimation AUTORESIZING
-    // (PanelCocoa_setAnchors' autoresizingMask + anchorPoint), which
-    // WindowServer lays out INSIDE the window-resize transaction — moving the
-    // sublayer in lockstep with the window edge on the same vsync, zero CPU
-    // math, zero catch-up. Per-event explicit frames (Darling_getChildLayout)
-    // would fight that accelerated pass and trail the live edge by a beat —
-    // the right/bottom "catching up" artifact. Darling_preFrame is already
-    // gated; this is the thread-0 twin. The settle pass re-applies exact
-    // frames once the flag clears.
-    if (Window_isLiveResizing(window))
-        return;
 
     // CoreAnimation strictly requires layer tree mutations to occur on the main thread.
     // If the Vulkan background worker calls this, it must be asynchronously dispatched,
@@ -1441,9 +1553,16 @@ void Window_compositeBoards(Window *window) {
         [CATransaction setDisableActions:YES];
         float winW = (float)Window_width(window);
         float winH = (float)Window_height(window);
+        CGFloat scale = [nsWindow backingScaleFactor];
+        if (scale <= 0.0) scale = 1.0;
+        int pxW = (int)(winW * scale + 0.5f);
+        int pxH = (int)(winH * scale + 0.5f);
+        extern bool PanelCocoa_setSize(void *pc, int w, int h);
+
         CALayer *sceneLayer = nullptr;
         CALayer *contentLayer = nullptr;
         if (scenePc) {
+            PanelCocoa_setSize(scenePc, pxW, pxH);
             sceneLayer = (__bridge CALayer*) PanelCocoa_layer(scenePc);
             if (sceneLayer) {
                 sceneLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
@@ -1453,6 +1572,7 @@ void Window_compositeBoards(Window *window) {
             }
         }
         if (contentPc) {
+            PanelCocoa_setSize(contentPc, pxW, pxH);
             contentLayer = (__bridge CALayer*) PanelCocoa_layer(contentPc);
             if (contentLayer) {
                 contentLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
@@ -1497,6 +1617,16 @@ static NSWindowStyleMask styleMaskOf(Window *window) {
 
 static bool hasStyleBit(Window *window, NSWindowStyleMask bit) {
     return (styleMaskOf(window) & bit) != 0;
+}
+
+// Blur is banned on DECORATED chrome: the opaque titlebar + frosted glass
+// reads as a rendering bug. Detect it as titled-with-full-size-content-view
+// (NAKED) or zero-style (BORDERLESS) being the allowed blur carriers.
+static bool windowChromeIsDecorated(Window *window) {
+    if (!window)
+        return false;
+    return hasStyleBit(window, NSWindowStyleMaskTitled)
+        && !hasStyleBit(window, NSWindowStyleMaskFullSizeContentView);
 }
 
 // Single mask-rewrite path for all capability toggles. While native fullscreen
@@ -1626,6 +1756,16 @@ void Window_show(Window *window) {
         // Prime the monitor mirror eagerly: a window that just became
         // visible should know where it lives before the first pump.
         refreshMonitorId(window);
+
+        static dispatch_once_t s_modalTimerOnce;
+        dispatch_once(&s_modalTimerOnce, ^{
+            NSTimer *modalTimer = [NSTimer timerWithTimeInterval:1.0/60.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
+                (void) timer;
+                GfxLoop_modalTick();
+            }];
+            [[NSRunLoop mainRunLoop] addTimer:modalTimer forMode:NSEventTrackingRunLoopMode];
+            [[NSRunLoop mainRunLoop] addTimer:modalTimer forMode:NSModalPanelRunLoopMode];
+        });
     }
 }
 
@@ -1725,6 +1865,18 @@ void Window_setUndecorated(Window *window, int mode) {
         bool transparent = (mode == WINDOW_UNDECORATED_NAKED);
         [(*window).nsWindow setTitlebarAppearsTransparent:transparent];
         [(*window).nsWindow setTitleVisibility:(transparent ? NSWindowTitleHidden : NSWindowTitleVisible)];
+
+        // Chrome can never outrun the blur ban: switching to DECORATED strips
+        // any active blur so a frosted titlebar never renders.
+        if (mode != WINDOW_UNDECORATED_NAKED && mode != WINDOW_UNDECORATED_BORDERLESS) {
+            for (NSView *v in [[(*window).nsWindow contentView] subviews]) {
+                if ([v isKindOfClass:[NSVisualEffectView class]]) {
+                    [(NSVisualEffectView*) v removeFromSuperview];
+                    Window_setTransparent(window, false);
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -1765,6 +1917,11 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
 void Window_setBlur(Window *window, float blur) {
     if (!window) return;
     @autoreleasepool {
+        if (blur > 0.01f && windowChromeIsDecorated(window)) {
+            NSLog(@"window: blur rejected — decorated chrome cannot be blurred (set WINDOW_UNDECORATED_NAKED/BORDERLESS first)");
+            return;
+        }
+
         NSWindow *nsw = (*window).nsWindow;
         NSView *contentView = [nsw contentView];
         
@@ -2154,13 +2311,36 @@ void *Window_contentView(Window *window) {
 }
 
 @implementation VulkanView
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.device = MTLCreateSystemDefaultDevice();
+        self.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
+        self.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+        self.paused = YES;
+        self.enableSetNeedsDisplay = NO;
+    }
+    return self;
+}
+
 - (BOOL)isFlipped {
     return YES;
 }
 
 - (NSView*)hitTest:(NSPoint)point {
-    (void) point;
-    return nil; // Let events pass through to WindowContentView
+    if (!NSPointInRect(point, [self bounds]))
+        return nil;
+
+    Window *w = windowHandleOf([self window]);
+    if (w) {
+        Panel *contentPanel = atomic_load_explicit(&(*w).contentPanel, memory_order_acquire);
+        if (contentPanel) {
+            extern bool Darling_hitTest(Panel *p, float px, float py);
+            if (Darling_hitTest(contentPanel, (float)point.x, (float)point.y))
+                return self;
+        }
+    }
+    return nil; // Pass through to underlying views when clicking on transparent/empty areas
 }
 
 // Zoom bridge accessors — thread 0 only, no atomic.
@@ -2228,9 +2408,7 @@ void *Window_contentView(Window *window) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
             [(CAMetalLayer*) [self layer] setContentsGravity:kCAGravityTopLeft];
-            // Reassert the YES that persisted since makeBackingLayer (idempotent:
-            // neither drag, zoom, nor fullscreen ever clears it now).
-            [(CAMetalLayer*) [self layer] setPresentsWithTransaction:YES];
+            [(CAMetalLayer*) [self layer] setPresentsWithTransaction:NO];
             [CATransaction commit];
         }
 
@@ -2270,26 +2448,19 @@ void *Window_contentView(Window *window) {
     if (w)
         atomic_store_explicit(&(*w).liveResizing, true, memory_order_relaxed);
 
-    // Board-contract twin: window-sized Metal boards keep their exact-size
-    // drawable TopLeft-pinned through the drag (freeze-exact — never Resize)
-    // while fixed child panes stay TopLeft-pinned. Reasserted at settle.
+    // Board-contract twin: window-sized Metal boards stay TopLeft-pinned
+    // through the drag while fixed child panes stay TopLeft-pinned.
+    // Reasserted at settle.
     extern void PanelCocoa_setLiveResizingAll(bool live);
     PanelCocoa_setLiveResizingAll(true);
 
-    // FREEZE-EXACT DRAG: the board swapchain stays at its frozen extent and
-    // its gravity stays TopLeft, so the last presented frame keeps its exact
-    // pre-drag pixels pinned top-left every drag step — zero stretch. The
-    // seam beyond the frozen extent is the board's transparent (opaque=NO)
-    // remainder: blur / window background shows through as the window grows.
-    // This is the "empty gorge" trade-off the old Resize gravity hid: the
-    // frozen frame does NOT cover the growing bounds, but it also never
-    // smears. The settle rebuild replaces the frozen frame with an exact
-    // TopLeft one at the true final size. The panes (separate CALayer
-    // sublayers) are not affected by this gravity; they keep animating in
-    // place. Pane anchoring during the drag is WindowServer-accelerated:
-    // their autoresizingMask + anchorPoint (PanelCocoa_setAnchors) make CA
-    // move the sublayers inside the window-resize transaction, edge-locked,
-    // no per-event CPU frames (Window_compositePanes early-returns while live).
+    // Rule 11.6 LIVE CHASE: extents track the drag step-by-step (setFrameSize
+    // + windowDidResize chase drawableSize per step, worker presents through
+    // the drag) while gravity stays TopLeft — the frame never stretches, it
+    // re-renders at the new size each step. Pane anchoring during the drag
+    // stays WindowServer-accelerated: autoresizingMask + anchorPoint
+    // (PanelCocoa_setAnchors) move sublayers inside the window-resize
+    // transaction, edge-locked, no per-event CPU frames.
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
         // YES persists from makeBackingLayer through the drag: the worker
         // commits its own explicit transaction per present walk, so YES
@@ -2322,7 +2493,7 @@ void *Window_contentView(Window *window) {
     layer.contentsGravity = kCAGravityTopLeft;
     layer.geometryFlipped = YES;
     layer.opaque = NO;
-    layer.presentsWithTransaction = YES;
+    layer.presentsWithTransaction = NO;
     layer.device = MTLCreateSystemDefaultDevice();
     CGFloat scale = [self window] ? [[self window] backingScaleFactor] : 1.0;
     if (scale <= 0.0)
@@ -2358,23 +2529,22 @@ void *Window_contentView(Window *window) {
 
     atomic_store_explicit(&(*w).cachedWidth, (int) newSize.width, memory_order_relaxed);
     atomic_store_explicit(&(*w).cachedHeight, (int) newSize.height, memory_order_relaxed);
+    atomic_fetch_add_explicit(&(*w).sizeGeneration, 1, memory_order_release);
+    windowFireResized(w, (int)newSize.width, (int)newSize.height);
 
     Panel *contentPanel = atomic_load_explicit(&(*w).contentPanel, memory_order_acquire);
     if (contentPanel) {
         extern void Darling_setPanelSize(Panel *p, float w, float h);
         Darling_setPanelSize(contentPanel, (float)newSize.width, (float)newSize.height);
+        extern int Darling_attachPanelBoards(Window *window, int width, int height);
+        Darling_attachPanelBoards(w, (int)newSize.width, (int)newSize.height);
         Window_compositeBoards(w);
+        Window_compositePanes(w, contentPanel);
+        extern void Darling_markLiveDirty(Panel *contentPanel);
+        Darling_markLiveDirty(contentPanel);
+        extern void Darling_propagatePaneDirty(Window *window, Panel *contentPanel);
+        Darling_propagatePaneDirty(w, contentPanel);
     }
-
-    // LIVE-RESIZE CONTRACT (Rule 11.6): mid-drag thread 0 moves CALayer
-    // frames only (above). Swapchain rebuilds and synchronous render hooks
-    // are settle-only — per-drag-pixel GPU work is the size-proportional-lag
-    // defect. settleAfterResize owns the one rebuild + one re-render.
-    BOOL live = [self window] ? [[self window] inLiveResize] : NO;
-    if (!live)
-        live = _liveResizing || _fullScreenTransitioning;
-    if (live)
-        return;
 
     if ([[self layer] isKindOfClass:[CAMetalLayer class]]) {
         CAMetalLayer *metal = (CAMetalLayer*) [self layer];
