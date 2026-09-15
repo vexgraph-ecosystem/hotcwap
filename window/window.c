@@ -27,7 +27,7 @@
  * ============================================================================
   * platform-agnostic window API.
   *
-  * STRUCT FIELDS: none — stub backend (no Window struct defined here; real fields live in objc/window_cocoa.m)
+  * STRUCT FIELDS: none — stub backend (no Window struct defined here; real fields live in window/window_cocoa.m)
   *
   * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------

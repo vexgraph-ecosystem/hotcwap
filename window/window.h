@@ -346,7 +346,7 @@ void Window_setGravityTopLeft(Window *window);
 // owns no runloop, so its implicit transaction never commits at idle and
 // every presentsWithTransaction=YES drawable would stall behind it —
 // Begin/End release YES-presents on worker cadence. Apple-only (impl in
-// objc/window_cocoa.m, like Window_metalLayer); call from the present
+// window/window_cocoa.m, like Window_metalLayer); call from the present
 // worker only, guarded by #ifdef __APPLE__ at the call site.
 void Window_workerPresentBegin(void);
 void Window_workerPresentEnd(void);
