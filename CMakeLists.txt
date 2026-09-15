@@ -103,8 +103,14 @@ if(TARGET graphvex)
 endif()
 
 # OS window backend: the fresh AppKit window backend on macOS (pure AppKit,
-# zero Vulkan/Metal — a window with bridges per the Window Decoupling Law),
-# platform stubs elsewhere.
+# zero Vulkan/Metal — a window with bridges per the Window Decoupling Law).
+# On Windows the lean Win32 draft (window/window_win32.c) is the production
+# candidate; the legacy safe-default stub (window.c) stays one flag away.
+# On Linux the lean Wayland draft (window/window_wayland.c) is opt-in and
+# requires the wayland-client + xkbcommon dev libraries; without them (or the
+# flag) the X11 fallback (window_linux.c) builds.
+# NOTE: both drafts are compiled only on their own host — the macOS build
+# never sees them, keeping the umbrella AppKit trail green.
 if(APPLE)
     target_sources(hotcwap PRIVATE
             window/window_cocoa.m
@@ -116,9 +122,30 @@ if(APPLE)
         "-framework AppKit"
     )
 elseif(WIN32)
-    target_sources(hotcwap PRIVATE window/window.c)
+    option(HOTCWAP_WIN32_LEGACY "Use the legacy Win32 safe-default stub (window.c) instead of the lean draft" OFF)
+    if(HOTCWAP_WIN32_LEGACY)
+        target_sources(hotcwap PRIVATE window/window.c)
+    else()
+        target_sources(hotcwap PRIVATE window/window_win32.c)
+        target_link_libraries(hotcwap PUBLIC user32 gdi32)
+    endif()
 elseif(UNIX)
-    target_sources(hotcwap PRIVATE window/window_linux.c)
+    option(HOTCWAP_USE_WAYLAND "Build the lean Wayland draft (window_wayland.c); auto-falls back to window_linux.c when the libraries are absent" OFF)
+    if(HOTCWAP_USE_WAYLAND)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(WAYLAND QUIET IMPORTED_TARGET wayland-client xkbcommon)
+        endif()
+        if(WAYLAND_FOUND)
+            target_sources(hotcwap PRIVATE window/window_wayland.c)
+            target_link_libraries(hotcwap PUBLIC PkgConfig::WAYLAND)
+        else()
+            message(WARNING "HOTCWAP_USE_WAYLAND=ON but wayland-client/xkbcommon not found — falling back to window_linux.c")
+            target_sources(hotcwap PRIVATE window/window_linux.c)
+        endif()
+    else()
+        target_sources(hotcwap PRIVATE window/window_linux.c)
+    endif()
 endif()
 endif() # NOT TARGET hotcwap
 

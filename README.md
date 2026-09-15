@@ -88,9 +88,11 @@ target_link_libraries(my_app PRIVATE hotcwap)
 * **`kernel/kernel.h/.c`** — R1 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
 * **`process/`** — Process taxonomy: `process` (one-shot invocable), `application` (executable identity + window registry + hot-module slot), `console` (tty/session pump).
 * **`spoke/vexspoke.h/.c`** — R1→R2 bridge contract: the `VexspokeApi` fn-table (arena + input rings, opaque handles, type-attested). The single seam including vexspoke headers — `kernel/` names no vexspoke type.
-* **`window/window.h/.c`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
+* **`window/window.h`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
 * **`window/window_cocoa.m`** — Native macOS AppKit backend (pure AppKit, zero Vulkan/Metal): window lifecycle, event pump, chrome, traffic-light API, per-window `WindowEvent` registry.
-* **`window/window_linux.c`** — Linux X11/Wayland display backend.
+* **`window/window_linux.c`** — Linux X11 fallback backend (kept for hosts without Wayland dev libraries).
+* **`window/window_wayland.c`** — Lean Linux Wayland draft backend (1:1 cocoa mirror; opt-in via `-DHOTCWAP_USE_WAYLAND=ON`, auto-falls back to X11 when `wayland-client`/`xkbcommon` are absent — `;;DRAFT`, needs a Linux host to compile).
+* **`window/window_win32.c`** — Lean Windows Win32 draft backend (1:1 cocoa mirror; the production candidate, with `window.c` kept as the legacy safe-default stub via `-DHOTCWAP_WIN32_LEGACY=ON` — `;;DRAFT`, needs a Windows host to compile).
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — The `MANIFEST(...)` install-layout authority (the "manifest binary way"): the install tree plus the `manifest.json` library catalog the downloader edits. `MANIFEST(kind, org, app)` resolves `<application-data>/<org>/<app>` once; `MANIFEST_LIBRARY(...)` registers library KEYS; `MANIFEST_UPDATE(library, payloadDir)` fail-closes undeclared payload sections and stages `bin/new/<library>`; `MANIFEST_PROMOTE()` slides each library's generations — the MODE-2 cold-swap ladder beneath the MODE-1 `Hot_poll` hot swap. See `docs/install.md`.
 * **`main/test_suite.c`** (umbrella root) & **`_tests/hotcwap/`** — Verification harnesses: `spoke_test`, `window_event_test`, `window_test` for spoke bridging, event dispatch, window creation, and dynamic library swapping.
