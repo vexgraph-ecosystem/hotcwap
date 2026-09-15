@@ -5,60 +5,117 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
 
-#include "app/application.h"
 #include "nio/mem.h"
+#include "process/application.h"
+#include "process/console.h"
+#include "process/process.h"
 
-// kernel/kernel.h — R0 Host Supervisor (thin nano-VM).
+// kernel/kernel.h — R0 Host Supervisor: storage + dispatch, never an executor.
 //
-// Owns the process lifetime: master arena, transient scratch arena, and the
-// Application registry. Boots first, tears down last. Knows NOTHING about
-// darling widgets, api-haven schemas, database drivers, language grammars,
-// or engines — those attach as opaque Application handles + callbacks
-// (AppRunFn / AppTickFn / AppHotReloadFn) + HotModule dylibs.
+// The Kernel is an object that STORES registries and SENDS work. It holds the
+// master arena, the transient scratch arena, and the three per-kind registries
+// (processes / applications / consoles). It owns NO loop, NO tick, and NO
+// worker thread — Kernel_run is a thin reference
+// forward that hands each registered kind to its own run function:
+// Process_run() for one-shot invokables, Console_run() for session pumps,
+// and graphvex's GfxLoop registration for windowed Applications. The Kernel
+// never implements the work itself, so hot-reloading a module swaps the
+// running code without touching the supervisor.
+//
+// The frame loop, event pump (Thread 0), presentation, and per-frame handler
+// invocation live in graphvex's GfxLoop (the Vertical Integration Law / the Window Decoupling Law); the Kernel
+// merely hands the Application over.
 //
 // Lifecycle (vk_test order):
-//   kernel -> application -> Kernel_addApplication -> window ->
-//   Application_addWindow -> Kernel_run(kernel) -> Kernel_removeApplication ->
-//   Application_free -> Kernel_free.
+//   kernel -> application -> Kernel_addApplication ->
+//   window -> Application_addWindow -> Kernel_run(kernel) ->
+//   Kernel_removeApplication -> Application_free -> Kernel_free.
 //
-// Kernel_run is the SOLE blocking entry: Application exposes start/tick/stop
-// only and never blocks. Kernel_free refuses (false + stderr warn) while any
-// application is still registered — remove them first per Rule 26.
+// Kernel_run is the SOLE blocking entry: it dispatches every registered kind
+// through that kind's own run method. Kernel_free refuses (false + stderr
+// warn) while any kind is still registered — remove them first per the Teardown Order Law.)
 //
-// Ownership law: Kernel REGISTERS applications and multiplexes their
-// non-blocking ticks via Kernel_tick / Kernel_run on Thread 0.
-// Kernel_destroy stops all apps top-down, bounds-joins threads, tears down
-// Vulkan, destroys transient arena, then master arena LAST per Rule 26.
+// --- The Terminal-Run Contract (Kernel_runAll arming) ---
+// Kernel_runAll is TERMINAL on the calling thread: every registration must
+// happen BEFORE the first Kernel_runAll call — that is the sole supported
+// path. Once armed (running == true, runThreadId == arming thread):
+//   - The arming (Thread 0) thread CANNOT register anything more: the
+//     Kernel_add* entry points refuse with false + one stderr warn. The run
+//     loop applies ONLY what was registered before arming.
+//   - ANY OTHER thread may still register: the add posts into the deferred-add
+//     mailbox (mutex-guarded, growable, cold path), and the run loop drains it
+//     on its next pass — so a hot-reloaded module or a worker can still spawn
+//     a new Application / Window mid-run, on its own schedule, delivered on
+//     Thread 0 by the pass itself.
+// Kernel_runAll completes when EVERY registered kind is done: processes after
+// their one-shot invoke, consoles when their session joins (Console_isRunning
+// flips false), applications when all windows report shouldClose per the
+// Application_isFinished completion predicate. Kernel_stop() ends the run
+// immediately. See the ;;INTENTION in kernel.c for the full reasoning (the
+// Conflict Triage Law: thread safety wins — the registries are NOT copied to
+// the mailbox, the mailbox feeds the same registries, on Thread 0).
 
-#define KERNEL_MAX_APPS 8
+#define KERNEL_MAX_APPS     8
+#define KERNEL_MAX_PROCS    8
+#define KERNEL_MAX_CONSOLES 8
 #define KERNEL_ARENA_DEFAULT (64 * 1024 * 1024)
 #define KERNEL_TRANSIENT_DEFAULT (64 * 1024 * 1024)
 
-// Process exit codes returned by the Kernel_run entry.
+// Process exit codes returned by the Kernel_run dispatch entry.
 #define KERNEL_EXIT_OK 0
 #define KERNEL_EXIT_NO_APPS -1
 
 typedef struct Kernel Kernel;
 
+// Deferred-add mailbox slot (KERNEL-KINDS-DEFERRED PRIVATE HELPER sub-record —
+// the Single Class Per File Law slot-record doctrine: behaviorless row owned by
+// Kernel, wired entirely in kernel.c, drained on Thread 0 by the run loop's
+// next pass after Kernel_run* is armed). Holds exactly one pending
+// registration posted off the arming thread per the Terminal-Run Contract.
+typedef enum KernelDeferredKind {
+    KERNEL_DEFERRED_NONE = 0,
+    KERNEL_DEFERRED_APPLICATION,
+    KERNEL_DEFERRED_PROCESS,
+    KERNEL_DEFERRED_CONSOLE,
+} KernelDeferredKind;
+
+typedef struct KernelDeferred {
+    KernelDeferredKind kind;  // which registry the pending add targets
+    void *ptr;                // Application* / Process* / Console* (as void*)
+} KernelDeferred;
+
 struct Kernel {
-    MemoryArena *arena;                              // master session arena (owns structure)
-    MemoryArena *transientArena;                     // per-tick scratch arena (reset, never freed mid-frame)
-    Application *applications[KERNEL_MAX_APPS];      // registered apps (opaque to engines)
-    uint32_t applicationCount;                       // used slots in applications[]
-    _Atomic bool running;                            // supervisor active flag
-    Thread *presentWorker;                           // present thread: board + all VkPane chains (GUI mode)
+    MemoryArena *arena;                          // master session arena (owns structure)
+    MemoryArena *transientArena;                 // per-event scratch arena (reset, never freed mid-run)
+    Application *applications[KERNEL_MAX_APPS];  // windowed apps (opaque to engines)
+    uint32_t applicationCount;                   // used slots in applications[]
+    Process     *processes[KERNEL_MAX_PROCS];    // one-shot invokables
+    uint32_t processCount;                       // used slots in processes[]
+    Console     *consoles[KERNEL_MAX_CONSOLES];  // session pumps
+    uint32_t consoleCount;                       // used slots in consoles[]
+
+    // --- Terminal-run guard (wired by the Kernel_run* arming code) ---
+    atomic_bool running;                         // true only while a Kernel_run* is live
+    atomic_uintptr_t runThreadId;                // arming (Thread 0) id; 0 = never armed
+
+    // --- Deferred-add mailbox (the KERNEL-KINDS-DEFERRED slot above) ---
+    pthread_mutex_t addLock;                     // guards the three fields below
+    KernelDeferred *deferred;                    // growable pending-add slots (cold path)
+    size_t deferredCount;                        // queued entries
+    size_t deferredCap;                          // allocated slots
 };
 
 // --- Overloaded constructors ---
 //
-//   Kernel()                         -> defaults (64MB master + 64MB transient)
+//   Kernel()                           -> defaults (64MB master + 64MB transient)
 //   Kernel(arenaBytes, transientBytes) -> sized arenas
 //
 // Arenas come from MemoryArena_create (isolated slab sets, ABI-stable).
 // The Kernel struct itself is calloc-owned in Phase 1 (mirrors
 // Application_0); migration to arena-owned Kernel is tracked via
-// ;;INTENTION in kernel.c per Rule 33.
+// ;;INTENTION in kernel.c per the Conflict Triage Law.
 Kernel *Kernel_0(void);
 Kernel *Kernel_1(size_t arenaBytes);
 Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes);
@@ -70,11 +127,11 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes);
     Kernel_2, Kernel_1, Kernel_0 \
 )(__VA_ARGS__)
 
-// Free supervision AFTER all applications and windows are gone.
-// Guarded (Rule 26): returns false plus an stderr warn while any application
-// is still registered — Kernel_removeApplication first, then retry. Frees the
-// transient arena, then the master arena LAST, then the Kernel struct.
-// Never call while any present worker is still active (Rule 27 bounded).
+// Free supervision AFTER all kinds and windows are gone.
+// Guarded (the Teardown Order Law): returns false plus an stderr warn while any process,
+// application, or console is still registered — remove them first, then
+// retry. Frees the transient arena, then the master arena LAST, then the
+// Kernel struct. Never call while a loop/worker is still active (the Bounded Wait Law).
 bool Kernel_free(Kernel *self);
 
 // Legacy shim over Kernel_free: kept so existing callers link without edits.
@@ -82,24 +139,61 @@ bool Kernel_free(Kernel *self);
 // force-clearing it — prefer Kernel_free and check the result.
 void Kernel_destroy(Kernel *self);
 
-// --- Supervisor state & execution ---
-bool Kernel_isRunning(const Kernel *self);
+// --- Supervisor state ---
+// Ends a live Kernel_run* run immediately: stops every registered app,
+// cancels every console session (SIGTERM + cancel flag), clears running, and
+// idles the run loop. Safe to call from any thread while the run is live.
 void Kernel_stop(Kernel *self);
-// SOLE blocking entry, arity-overloaded:
-//   Kernel_run(kernel)          -> run all registered applications
-//   Kernel_run(kernel, app)     -> add-if-absent, then run (same multiplex
-//                                  pass — siblings still tick, never a private
-//                                  loop; the filter only selects the exit code
-//                                  owner's completion is NOT awaited alone).
+
+// True while a Kernel_run* entry is currently live on some thread (armed and
+// not yet disarmed). False before the first run and after Kernel_stop/run
+// exit. The Terminal-Run Contract: while true, the arming thread's add calls
+// are refused; other threads' adds land in the deferred mailbox.
+bool Kernel_isRunning(const Kernel *self);
+
+// --- Work dispatch (SOLE blocking entry, arity-overloaded) ---
+//
+// The Kernel forwards work, it never does it. Each overload relays to the
+// registered kind's own run function — the Kernel owns zero loops:
+//   Kernel_run(kernel)                       -> run ALL registered kinds
+//   Kernel_run(kernel, Process *)            -> Kernel_runProcess (one-shot)
+//   Kernel_run(kernel, Console *)            -> Kernel_runConsole (session start)
+//   Kernel_run(kernel, Application *)        -> Kernel_runApplication (GfxLoop attach)
+//
+// The 1-arity Kernel_run(kernel) is the completion reactor (the user model):
+//
+//     Kernel *k  = Kernel();
+//     Console *c = Console("/bin/bash");
+//     Application *a = Application("vex");
+//     Kernel_addConsole(k, c);
+//     Kernel_addApplication(k, a);
+//     Kernel_run(k);             // runs until ALL kinds are done
+//
+// It runs every registered Process to completion once, starts every Console
+// session pump, starts every Application and shows its windows, then
+// SUPERVISES until every kind reports done (see Application_isFinished /
+// Console_isRunning): drain deferred adds -> Window_pollEvents -> bounded
+// Console_poll slices -> ask app closed-state at a 250ms cadence -> park.
+// Kernel_stop() ends the run; Kernel_run returns the first non-zero Process
+// exit seen, or KERNEL_EXIT_OK. It returns KERNEL_EXIT_NO_APPS when nothing
+// is registered. The 2-arity forms stay blocking/non-supervising per kind.
 int  Kernel_runAll(Kernel *self);
-int  Kernel_runOne(Kernel *self, Application *app);
-bool Kernel_tick(Kernel *self, double dt);
+int  Kernel_runProcess(Kernel *self, Process *p);
+bool Kernel_runConsole(Kernel *self, Console *c);
+int  Kernel_runApplication(Kernel *self, Application *a);
 
 #define KERNEL_RUN_CHOOSER(_0, _1, _2, NAME, ...) NAME
 
+#define KERNEL_RUN_DISPATCH(self, kind)                    \
+    _Generic((kind),                                       \
+        Process     *: Kernel_runProcess,                  \
+        Console     *: Kernel_runConsole,                  \
+        Application *: Kernel_runApplication               \
+    )(self, kind)
+
 #define Kernel_run(...) KERNEL_RUN_CHOOSER( \
     dummy __VA_OPT__(,) __VA_ARGS__, \
-    Kernel_runOne, Kernel_runAll \
+    KERNEL_RUN_DISPATCH, Kernel_runAll \
 )(__VA_ARGS__)
 
 // --- Application registry (multi-app, N apps x M windows per process) ---
@@ -115,7 +209,21 @@ uint32_t Kernel_getApplicationCount(const Kernel *self);
 // Copy registry into out[] (up to cap), returns entries written.
 uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t cap);
 
-// --- Arena access (Rule 24 symmetric getters) ---
+// --- Process registry (one-shot invokables) ---
+bool    Kernel_addProcess(Kernel *self, Process *p);
+bool    Kernel_removeProcess(Kernel *self, Process *p);
+Process *Kernel_getProcess(const Kernel *self, uint32_t index);
+uint32_t Kernel_getProcessCount(const Kernel *self);
+uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap);
+
+// --- Console registry (session pumps) ---
+bool    Kernel_addConsole(Kernel *self, Console *c);
+bool    Kernel_removeConsole(Kernel *self, Console *c);
+Console *Kernel_getConsole(const Kernel *self, uint32_t index);
+uint32_t Kernel_getConsoleCount(const Kernel *self);
+uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap);
+
+// --- Arena access (the Symmetric Getter/Setter Completeness Law symmetric getters) ---
 MemoryArena *Kernel_getArena(const Kernel *self);
 MemoryArena *Kernel_getTransientArena(const Kernel *self);
 

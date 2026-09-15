@@ -1,50 +1,57 @@
 #include "kernel/kernel.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
+#include "annotation/intention.h"
 #include "annotation/overview.h"
-#include "hot/spv_watch.h"
-#include "input/key.h"
-#include "input/mouse.h"
-#include "oop/type.h"
-#include "time/nanotime.h"
 #include "vulkan/vk.h"
-#include "vulkan/vk_layer.h"
-#include "vulkan/vk_pane.h"
 #include "window/window.h"
 
 ;;OVERVIEW
 /**
  * ============================================================================
  * CLASS: Kernel (kernel/kernel.c)
- * LEVEL: L4 — Self-Management (R0 Supervisor; Rule 17 vs Rule 28: L = edit-risk, R = supervision)
+ * LEVEL: L4 — Self-Management (R1 Host; the Vertical Integration Law vs the Four System Levels Law: L = edit-risk, R = supervision)
  * ============================================================================
- * R0 Host Supervisor: the thin nano-VM. Owns the master session arena, the
- * transient per-tick scratch arena, and the Application registry (N apps x M
- * windows per process). Boots first, tears down last. Holds windows stable
- * across HotModule swaps; knows nothing about darling widgets, api-haven
- * schemas, database drivers, language grammars, or engines.
+ * R1 Host Supervisor: STORAGE + DISPATCH, never an executor. Owns the master
+ * session arena, the transient scratch arena, and the three per-kind
+ * registries (processes / applications / consoles). Kernel_run is a thin
+ * reference forward that hands each registered kind to its own run function;
+ * the Kernel owns NO loop, NO tick, and NO worker thread. Frame scheduling,
+ * the event pump, and presentation live in graphvex's GfxLoop (the Vertical
+ * Integration Law / the Window Decoupling Law).
  *
  * STRUCT FIELDS (Mirroring kernel/kernel.h — exactly this file's class):
  * ----------------------------------------------------------------------------
  *   MemoryArena *arena;                          // master session arena
- *   MemoryArena *transientArena;                  // per-tick scratch arena
- *   Application *applications[KERNEL_MAX_APPS];   // registered apps (opaque handles)
+ *   MemoryArena *transientArena;                 // per-event scratch arena
+ *   Application *applications[KERNEL_MAX_APPS];  // windowed apps (opaque handles)
  *   uint32_t applicationCount;                    // used slots in applications[]
- *   _Atomic bool running;                         // supervisor active flag
- *   Thread *presentWorker;                        // present thread (board + panes)
+ *   Process     *processes[KERNEL_MAX_PROCS];     // one-shot invokables
+ *   uint32_t processCount;                       // used slots in processes[]
+ *   Console     *consoles[KERNEL_MAX_CONSOLES];  // session pumps
+ *   uint32_t consoleCount;                       // used slots in consoles[]
+ *   atomic_bool running;                          // terminal-run armed flag
+ *   atomic_uintptr_t runThreadId;                 // arming (Thread 0) id; 0 = never armed
+ *   pthread_mutex_t addLock;                      // guards the mailbox fields below
+ *   KernelDeferred *deferred;                     // growable pending-add slots
+ *   size_t deferredCount;                         // queued entries
+ *   size_t deferredCap;                           // allocated slots
  *
- * PRIVATE HELPERS:
+ * PRIVATE HELPERS (kept file-local pure-data only, each with full fields):
  * ----------------------------------------------------------------------------
- *   kernel_present_job(thread, task)   // worker loop: Vk_clearPresent then
- *                                      // VkPane_presentAll while running (the
- *                                      // two-thread live-resize contract: thread
- *                                      // 0 pumps events, this thread keeps
- *                                      // presenting/animating during drags).
- *                                      // Pacing: fence-paced healthy path,
- *                                      // budget-paced every path, never bare spin.
+ *   KernelDeferred    // deferred-add mailbox slot (kernel.h): memory married
+ *                     // to Kernel, ALL behavior lives in this file
+ *     KernelDeferredKind kind;   // which registry the pending add targets
+ *     void *ptr;                 // Application* / Process* / Console* (as void*)
+ *
+ *   Static wiring (no stored state): kernelRunActive, kernelPostDeferred,
+ *   kernelApplyDeferred, kernelDrainDeferred, kernelAdd{Application,Process,
+ *   Console}Internal, kernelAllDone, kernelStartApplication.
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
@@ -54,27 +61,52 @@
  *   - Kernel(arenaBytes, transientBytes)  : Kernel_2(arenaBytes, transientBytes)
  *
  * Core Functions:
- *   - Kernel_destroy(self)
+ *   - Kernel_destroy(self)   : legacy shim over free
  *   - Kernel_free(self)
- *   - Kernel_stop(self)
- *   - Kernel_isRunning(self)
- *   - Kernel_runAll(self)
- *   - Kernel_runOne(self, app)
- *   - Kernel_run(...)                 (arity macro: 1 arg -> runAll, 2 args -> runOne)
- *   - Kernel_tick(self, dt)
- *   - Kernel_addApplication(self, app)
- *   - Kernel_removeApplication(self, app)
+ *   - Kernel_stop(self)      : stop apps, cancel consoles, clear running
+ *   - Kernel_isRunning(self) : terminal-run armed?
+ *   - Kernel_runAll(self)    : completion reactor (arm -> dispatch -> supervise
+ *                              -> drain deferred -> disarm)
+ *   - Kernel_runProcess(self, p)     : forward to Process_run
+ *   - Kernel_runConsole(self, c)     : forward to Console_run
+ *   - Kernel_runApplication(self, a) : start + forward to graphvex GfxLoop
+ *   - Kernel_run(...)         (arity macro: 1 arg -> runAll, 2 args -> dispatch by type)
+ *   - Kernel_addApplication / removeApplication / getters (add* honors the
+ *     Terminal-Run Contract: armed-thread refusal + off-thread mailbox post)
+ *   - Kernel_addProcess / removeProcess / getters
+ *   - Kernel_addConsole / removeConsole / getters
  *
  * Getters:
- *   - Kernel_getApplication(self, index)
- *   - Kernel_getApplicationCount(self)
- *   - Kernel_getApplications(self, out, cap)
  *   - Kernel_getArena(self)
  *   - Kernel_getTransientArena(self)
  * ============================================================================
  */
 
-// ;;INTENTION("Phase-1 Kernel struct is calloc-owned like Application_0; arenas are MemoryArena-owned. Migrating the struct itself into arena storage happens once multi-app Kernel_run multiplexing lands — keeps teardown order provable today per Rule 33.")
+;;INTENTION("Kernel struct is calloc-owned like Application_0; "
+            "arenas are MemoryArena-owned. Migrating the struct itself"
+            " into arena storage happens once the registries move to doubling arena slabs per the Dynamic Scalability & Anti-Hardcoding Law — keeps teardown order provable today per the Conflict Triage Law.")
+
+;;INTENTION("Kernel_runApplication starts the app, shows its windows, then"
+            " blocks in Application_run's keep-alive parked loop until every "
+            "window closes. graphvex's GfxLoop frame scheduler lands later and "
+            "layers on top — registering windows into the loop, driving the "
+            "event pump, present-on-demand, and telemetry. The Kernel never "
+            "owns the loop either way; hotcwap's Application owns the window "
+            "end.")
+
+;;INTENTION("The Terminal-Run Contract (the Conflict Triage Law): Kernel_runAll"
+            " ARMS the kernel — running=true + runThreadId set on the arming"
+            " thread. After arming, Thread-0 registration is REFUSED with one"
+            " stderr warn: the run loop applies only what it was given before"
+            " run, so the arming thread cannot re-enter or mutate the registry"
+            " it is currently iterating (the Tier-1 thread-safety half). Other"
+            " threads may still register via the deferred-add mailbox (mutex-"
+            " guarded, growable realloc — a COLD path, never a steady-state"
+            " allocation), drained on Thread 0 by the run loop's next pass, so"
+            " a hot-reloaded module / worker can spawn an Application mid-run"
+            " on its own schedule. The registries are never copied to the"
+            " mailbox — the mailbox FEEDS the same arrays on the running"
+            " thread, keeping all registry mutation single-threaded.")
 
 
 // CONSTRUCTORS
@@ -104,7 +136,14 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     (*self).arena = arena;
     (*self).transientArena = scratch;
     (*self).applicationCount = 0;
-    atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
+    (*self).processCount = 0;
+    (*self).consoleCount = 0;
+    atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+    atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
+    pthread_mutex_init(&(*self).addLock, NULL);
+    (*self).deferred = NULL;
+    (*self).deferredCount = 0;
+    (*self).deferredCap = 0;
     return self;
 }
 
@@ -112,23 +151,32 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
 bool Kernel_free(Kernel *self) {
     if (!self)
         return false;
-    if ((*self).applicationCount > 0) {
-        fprintf(stderr, "kernel: %u applications still registered; remove before free\n",
-                (*self).applicationCount);
+    if ((*self).applicationCount > 0 || (*self).processCount > 0 || (*self).consoleCount > 0) {
+        fprintf(stderr,
+                "kernel: %u app(s), %u process(es), %u console(s) still registered; remove before free\n",
+                (*self).applicationCount, (*self).processCount, (*self).consoleCount);
         return false;
     }
     Kernel_stop(self);
 
-    // Bounded wait for worker threads to observe running = false (Rule 27)
-    struct timespec ts = { 0, 50 * 1000 * 1000 };
-    nanosleep(&ts, nullptr);
-
     if (Vk_ready())
         Vk_shutdown();
 
-    for (uint32_t i = 0; i < (*self).applicationCount; i++)
+    pthread_mutex_destroy(&(*self).addLock);
+    free((*self).deferred);
+    (*self).deferred = NULL;
+    (*self).deferredCount = 0;
+    (*self).deferredCap = 0;
+
+    for (uint32_t i = 0; i < KERNEL_MAX_APPS; i++)
         (*self).applications[i] = NULL;
     (*self).applicationCount = 0;
+    for (uint32_t i = 0; i < KERNEL_MAX_PROCS; i++)
+        (*self).processes[i] = NULL;
+    (*self).processCount = 0;
+    for (uint32_t i = 0; i < KERNEL_MAX_CONSOLES; i++)
+        (*self).consoles[i] = NULL;
+    (*self).consoleCount = 0;
 
     MemoryArena *scratch = (*self).transientArena;
     MemoryArena *arena = (*self).arena;
@@ -151,11 +199,20 @@ void Kernel_destroy(Kernel *self) {
 void Kernel_stop(Kernel *self) {
     if (!self)
         return;
+    // Ends a live Kernel_runAll immediately: the reactor loop re-checks
+    // running each pass and exits. Clearing running FIRST (before the app/
+    // console stop passes below) races nothing — the loop is the only reader
+    // and it reads running on the arming thread.
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
     for (uint32_t i = 0; i < (*self).applicationCount; i++) {
         Application *app = (*self).applications[i];
         if (app)
             Application_stop(app);
+    }
+    for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+        Console *c = (*self).consoles[i];
+        if (c)
+            Console_cancel(c);
     }
 }
 
@@ -165,278 +222,24 @@ bool Kernel_isRunning(const Kernel *self) {
     return atomic_load_explicit(&(*self).running, memory_order_relaxed);
 }
 
-// --- PRESENT WORKER (thread-1 GUI mode) -----------------------------------
-// The two-thread live-resize contract: thread 0 owns the OS event pump and
-// the AppKit live-resize tracking loop, and this worker owns ALL
-// presentation — demand propagation, retained layers, board swapchain first,
-// then every pane chain — so scenes KEEP ANIMATING while the user drags the
-// window (thread 0 is inside the modal tracking loop; its tick cannot
-// present). Demand is re-armed here every poll (bool stores only, Rule 35
-// hot-minimal), so immediate-on-demand survives a stalled tick.
-// Pacing: fence-paced healthy path, budget-paced every path, never bare spin.
-// Clean chains skip inside VkPane_presentAll, so idle rests at 0 presents
-// while the poll itself stays cheap. The sleep executes OUTSIDE any
-// Vk_ready() guard so the worker yields CPU to thread 0 even when Vulkan is
-// not ready.
-// Thread 1: Retained scene manager worker.
-// Runs offscreen scene rendering (VkLayer_visit) for retained scenes,
-// allowing scenes to update continuously in the background.
-static void kernel_present_job(Thread *selfThread, void *task) {
-    (void) selfThread;
-    Kernel *self = (Kernel*) task;
-    if (!self)
-        return;
+// --- REGISTRY INTERNALS + DEFERRED MAILBOX -----------------------------------
+// The three Kernel_add* entry points split into (a) the Terminal-Run guard
+// and (b) apply-internal peers that touch ONLY the registry arrays. The
+// guard lives at the public seam; the apply-internal peers are the sole
+// writers of the arrays. During a live run only the arming thread mutates
+// the registries (via drain), keeping iteration single-threaded per the
+// Tier-1 thread-safety half of the ;;INTENTION above.
 
-    const uint64_t frameBudgetNs = 16666667ULL; // ~60fps
-    const uint64_t minSleepNs = 1000000ULL;     // 1ms floor
-
-    while (atomic_load_explicit(&(*self).running, memory_order_relaxed)) {
-        struct timespec start;
-        clock_gettime(CLOCK_MONOTONIC, &start);
-
-        if (Vk_ready()) {
-            Window *w = nullptr;
-            if ((*self).applicationCount > 0 && (*self).applications[0] != nullptr)
-                w = Application_getWindow((*self).applications[0], 0);
-            bool sceneAdvanced = false;
-            if (w != nullptr) {
-                Panel *content = Window_getContentPanel(w);
-                if (content != nullptr) {
-                    extern void Darling_propagatePaneDirty(Window *window, Panel *contentPanel);
-                    Darling_propagatePaneDirty(w, content);
-                }
-                // Render dirty retained scene targets offscreen
-                sceneAdvanced = VkLayer_visit();
-            }
-#ifdef __APPLE__
-            // Explicit per-walk transaction: the worker owns no runloop, so
-            // YES-presents release here instead of stalling for thread 0.
-            Window_workerPresentBegin();
-#endif
-            bool walkPresented = false;
-            if (VkPane_count() == 0) {
-                walkPresented = Vk_clearPresent();
-            } else {
-                walkPresented = VkPane_presentAll();
-            }
-#ifdef __APPLE__
-            Window_workerPresentEnd();
-#endif
-#ifndef NDEBUG
-            // Throttled walk census (1Hz, debug only — release stays silent
-            // per Rule 35): which stage of the demand chain is stuck is
-            // answered by one line. panes=chains present, layers=retained
-            // scene targets registered, layerRendered/planePresented=did
-            // work this walk, live=stuck-resize flag.
-            static uint64_t s_walkLogLast = 0;
-            uint64_t walkNow = NanoTime_now();
-            if (walkNow - s_walkLogLast >= 1000000000ULL) {
-                s_walkLogLast = walkNow;
-                int live = (w != nullptr && Window_isLiveResizing(w)) ? 1 : 0;
-                fprintf(stderr, "vk: walk panes=%d layers=%d layerRendered=%d panePresented=%d live=%d\n",
-                        VkPane_count(), VkLayer_count(),
-                        sceneAdvanced ? 1 : 0, walkPresented ? 1 : 0, live);
-            }
-#endif
-        }
-
-        struct timespec end;
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        uint64_t elapsedNs = (uint64_t)(end.tv_sec - start.tv_sec) * 1000000000ULL
-                           + (uint64_t)(end.tv_nsec - start.tv_nsec);
-
-        uint64_t sleepNs = (elapsedNs < frameBudgetNs) ? (frameBudgetNs - elapsedNs) : minSleepNs;
-        if (sleepNs < minSleepNs)
-            sleepNs = minSleepNs;
-
-        struct timespec ts = { 0, (long)sleepNs };
-        nanosleep(&ts, nullptr);
-    }
+static bool kernelRunActive(const Kernel *self) {
+    return atomic_load_explicit(&(*self).running, memory_order_relaxed);
 }
 
-bool Kernel_tick(Kernel *self, double dt) {
-    if (!self)
-        return false;
-    if (!atomic_load_explicit(&(*self).running, memory_order_relaxed))
-        return false;
+// Forward: start one app manifest non-blocking (defined below with the run
+// helpers; kernelApplyDeferred admits deferred adds and starts them like the
+// initial pass would).
+static void kernelStartApplication(Kernel *self, Application *a);
 
-    // 1. Reset per-cycle scratch arena FIRST before any event polling or allocations
-    MemoryArena *scratch = (*self).transientArena;
-    if (scratch)
-        MemoryArena_freeAll(scratch);
-
-    // 2. Single Thread-0 OS event pump
-    Window_pollEvents();
-
-    Mouse_dispatchEvents();
-    Key_dispatchEvents();
-
-    if (Key_isDown(KEY_ESCAPE)) {
-        Kernel_stop(self);
-        return false;
-    }
-
-    // 3. Poll SPV shader watchers on registered applications
-    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
-        Application *app = (*self).applications[i];
-        if (!app)
-            continue;
-        SpvWatch *spv = Application_getSpvWatch(app);
-        if (spv && SpvWatch_changed(spv))
-            SpvWatch_snap(spv);
-    }
-
-    // 4. Tick each active application
-    bool anyRunning = false;
-    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
-        Application *app = (*self).applications[i];
-        if (!app)
-            continue;
-        if (Application_isRunning(app)) {
-            if (Application_tick(app, dt))
-                anyRunning = true;
-        }
-    }
-
-    if (!anyRunning) {
-        atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
-        return false;
-    }
-
-    // 5. Layout/attach pass — owned by Thread 0 (Main Thread).
-    // preFrame mutates layer ownership and layout, which is thread-0-only
-    // (Rule 11.6). Presentation runs on the present worker
-    // (kernel_present_job), so immediate-on-demand demand survives the modal
-    // live-resize loop that parks this tick. Direct Kernel_tick callers with
-    // no worker spawned (tests) present inline as the legacy single-thread
-    // path. Presents synchronously with WindowServer via CATransaction for
-    // presentsWithTransaction=YES.
-    if (Vk_ready()) {
-        if ((*self).applicationCount > 0 && (*self).applications[0]) {
-            Window *w = Application_getWindow((*self).applications[0], 0);
-            if (w) {
-                extern void Darling_preFrame(Window *window, int drawW, int drawH, void *userdata);
-                int winW = Window_width(w);
-                int winH = Window_height(w);
-                Darling_preFrame(w, winW, winH, nullptr);
-            }
-        }
-        if (!(*self).presentWorker) {
-#ifdef __APPLE__
-            Window_workerPresentBegin();
-#endif
-            if (VkPane_count() == 0) {
-                Vk_clearPresent();
-            } else {
-                VkPane_presentAll();
-            }
-#ifdef __APPLE__
-            Window_workerPresentEnd();
-#endif
-        }
-    }
-
-    return true;
-}
-
-int Kernel_runAll(Kernel *self) {
-    if (!self)
-        return KERNEL_EXIT_NO_APPS;
-    if ((*self).applicationCount == 0)
-        return KERNEL_EXIT_OK;
-    atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
-
-    // Warm up / start registered applications
-    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
-        Application *app = (*self).applications[i];
-        if (!app)
-            continue;
-        Application_start(app);
-
-        uint32_t winCount = Application_getWindowCount(app);
-        for (uint32_t wIdx = 0; wIdx < winCount; wIdx++) {
-            Window *w = Application_getWindow(app, wIdx);
-            if (w) {
-                if (!Vk_ready()) {
-                    Vk_setWindowSeam(w,
-                                     (void *(*)(void *))Window_metalLayer,
-                                     (bool (*)(void *))Window_isTransparent,
-                                     (VkWindowPresentMode (*)(void *))Window_getPresentMode,
-                                     (uint64_t (*)(void *))Window_renderGeneration,
-                                     (bool (*)(void *))Window_isLiveResizing,
-                                     (void (*)(void *, void *, void *))Window_setResizeRenderHook,
-                                     (void (*)(void *))Window_setGravityTopLeft);
-                    Vk_init();
-                }
-                // Warm up while hidden: both gates must pass — the board
-                // presents AND every pane presented at least once.
-                bool boardOk = false;
-                bool paneOk = false;
-                for (int frame = 0; frame < 60; frame++) {
-                    if (Vk_clearPresent())
-                        boardOk = true;
-                    // Pane warm-up: first pane pixels must exist BEFORE
-                    // Window_show — otherwise the window appears blank and
-                    // only fills in ticks later (panes self-register during
-                    // these warm-up presents via preFrame attach).
-                    if (VkPane_count() == 0 || VkPane_presentAll())
-                        paneOk = true;
-                    if (boardOk && paneOk)
-                        break;
-                    struct timespec ws = { 0, 8 * 1000 * 1000 };
-                    nanosleep(&ws, nullptr);
-                }
-                Window_show(w);
-            }
-        }
-    }
-
-    uint64_t lastTick = NanoTime_now();
-
-    // Two-thread mode: spawn the present worker so the board + panes keep
-    // rendering/animating while thread 0 pumps the OS event loop (live
-    // resize tracking runs INSIDE Window_pollEvents on thread 0 — a
-    // single-threaded present loop stops dead during a drag).
-    (*self).presentWorker = Thread_new(TYPE_THREAD_UI_SINGLETON, kernel_present_job,
-                                       1024, false, false);
-    if ((*self).presentWorker && Thread_run((*self).presentWorker))
-        Thread_submit((*self).presentWorker, self);
-
-    while (atomic_load_explicit(&(*self).running, memory_order_relaxed)) {
-        uint64_t now = NanoTime_now();
-        double dt = (double)(now - lastTick) / 1e9;
-        lastTick = now;
-
-        if (!Kernel_tick(self, dt))
-            break;
-
-        struct timespec ts = { 0, 1 * 1000 * 1000 };
-        nanosleep(&ts, nullptr);
-    }
-
-    atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
-
-    // Bounded join (Rule 26/27): the worker's loop checks running each pass
-    // and Vk_clearPresent's waits are all timeout-bounded, so Thread_stop's
-    // join completes in bounded time BEFORE the caller tears down Vulkan.
-    if ((*self).presentWorker) {
-        Thread_stop((*self).presentWorker);
-        (*self).presentWorker = NULL;
-    }
-
-    return KERNEL_EXIT_OK;
-}
-
-int Kernel_runOne(Kernel *self, Application *app) {
-    if (!self || !app)
-        return KERNEL_EXIT_NO_APPS;
-    (void) Kernel_addApplication(self, app);
-    return Kernel_runAll(self);
-}
-
-bool Kernel_addApplication(Kernel *self, Application *app) {
-    if (!self || !app)
-        return false;
+static bool kernelAddApplicationInternal(Kernel *self, Application *app) {
     for (uint32_t i = 0; i < (*self).applicationCount; i++)
         if ((*self).applications[i] == app)
             return false;
@@ -446,6 +249,264 @@ bool Kernel_addApplication(Kernel *self, Application *app) {
     return true;
 }
 
+static bool kernelAddProcessInternal(Kernel *self, Process *p) {
+    for (uint32_t i = 0; i < (*self).processCount; i++)
+        if ((*self).processes[i] == p)
+            return false;
+    if ((*self).processCount >= KERNEL_MAX_PROCS)
+        return false;
+    (*self).processes[(*self).processCount++] = p;
+    return true;
+}
+
+static bool kernelAddConsoleInternal(Kernel *self, Console *c) {
+    for (uint32_t i = 0; i < (*self).consoleCount; i++)
+        if ((*self).consoles[i] == c)
+            return false;
+    if ((*self).consoleCount >= KERNEL_MAX_CONSOLES)
+        return false;
+    (*self).consoles[(*self).consoleCount++] = c;
+    return true;
+}
+
+// Post a pending add from ANY thread (mutex-guarded, growable realloc — cold
+// path, never steady-state). The drain on Thread 0 steals the whole batch in
+// one lock and re-owns the arrays for the rest of the pass.
+static bool kernelPostDeferred(Kernel *self, KernelDeferredKind kind, void *ptr) {
+    pthread_mutex_lock(&(*self).addLock);
+    if ((*self).deferredCount == (*self).deferredCap) {
+        size_t cap = (*self).deferredCap ? (*self).deferredCap * 2 : 4;
+        KernelDeferred *nx = (KernelDeferred*) realloc((*self).deferred, cap * sizeof(KernelDeferred));
+        if (!nx) {
+            pthread_mutex_unlock(&(*self).addLock);
+            fprintf(stderr, "kernel: deferred-add mailbox grow failed (Kernel_add* dropped)\n");
+            return false;
+        }
+        (*self).deferred = nx;
+        (*self).deferredCap = cap;
+    }
+    (*self).deferred[(*self).deferredCount].kind = kind;
+    (*self).deferred[(*self).deferredCount].ptr = ptr;
+    (*self).deferredCount++;
+    pthread_mutex_unlock(&(*self).addLock);
+    return true;
+}
+
+// Admit one pending add into the registry on the arming thread, then START
+// it exactly like the initial pass would: processes invoke one-shot, consoles
+// spawn their session, applications start + show their windows. A kind that
+// fails the dup/full/guards stays unregistered and silent.
+static void kernelApplyDeferred(Kernel *self, KernelDeferredKind kind, void *ptr) {
+    switch (kind) {
+        case KERNEL_DEFERRED_APPLICATION: {
+            Application *a = (Application*) ptr;
+            if (kernelAddApplicationInternal(self, a))
+                kernelStartApplication(self, a);
+            break;
+        }
+        case KERNEL_DEFERRED_PROCESS: {
+            Process *p = (Process*) ptr;
+            if (kernelAddProcessInternal(self, p))
+                (void) Process_run(p, 0, nullptr);
+            break;
+        }
+        case KERNEL_DEFERRED_CONSOLE: {
+            Console *c = (Console*) ptr;
+            if (kernelAddConsoleInternal(self, c))
+                (void) Console_run(c);
+            break;
+        }
+        case KERNEL_DEFERRED_NONE:
+        default:
+            break;
+    }
+}
+
+// Steal the whole pending batch under the lock, then apply each entry OUTSIDE
+// the lock — the run loop keeps iterating its own registry, never the mailbox.
+static void kernelDrainDeferred(Kernel *self) {
+    pthread_mutex_lock(&(*self).addLock);
+    KernelDeferred *batch = (*self).deferred;
+    size_t n = (*self).deferredCount;
+    (*self).deferred = NULL;
+    (*self).deferredCount = 0;
+    (*self).deferredCap = 0;
+    pthread_mutex_unlock(&(*self).addLock);
+
+    for (size_t i = 0; i < n; i++)
+        kernelApplyDeferred(self, batch[i].kind, batch[i].ptr);
+
+    if (batch)
+        free(batch);
+}
+
+// Every registered kind reports done? Processes are done by construction
+// after the initial invoke pass (one-shot); consoles when their session
+// joined (Console_isRunning false); apps per the Application_isFinished
+// completion predicate (all windows closed or externally stopped).
+static bool kernelAllDone(const Kernel *self) {
+    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
+        Application *a = (*self).applications[i];
+        if (a && !Application_isFinished(a))
+            return false;
+    }
+    for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+        Console *c = (*self).consoles[i];
+        if (c && Console_isRunning(c))
+            return false;
+    }
+    return true;
+}
+
+// Start one app manifest NON-blocking: flip running, show every window. The
+// reactor supervises it to completion; the blocking Kernel_runApplication
+// path adds Application_run on top.
+static void kernelStartApplication(Kernel *self, Application *a) {
+    (void) self;
+    if (!a)
+        return;
+    Application_start(a);
+    uint32_t winCount = Application_getWindowCount(a);
+    for (uint32_t i = 0; i < winCount; i++) {
+        Window *w = Application_getWindow(a, i);
+        if (w)
+            Window_show(w);
+    }
+}
+
+// --- WORK DISPATCH ----------------------------------------------------------
+// The Kernel forwards work, it never does it: each registered kind is relayed
+// to its own run function. The frame loop, event pump, presentation, and
+// per-frame handler invocation live in graphvex's GfxLoop (the Vertical
+// Integration Law / the Window Decoupling Law). Kernel_runAll is the ONE
+// supervising entry: it ARMS (the Terminal-Run Contract), dispatches the
+// initial registrations, then runs a completion reactor until every kind is
+// done or Kernel_stop() lands.
+
+int Kernel_runAll(Kernel *self) {
+    if (!self)
+        return KERNEL_EXIT_NO_APPS;
+    if ((*self).applicationCount == 0 && (*self).processCount == 0 && (*self).consoleCount == 0)
+        return KERNEL_EXIT_NO_APPS;
+
+    // TERMINAL-RUN ARM: from here the arming (Thread 0) thread can no longer
+    // register — all Kernel_add* on it are refused; other threads post into
+    // the deferred mailbox, drained on the next pass below.
+    atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
+    atomic_store_explicit(&(*self).runThreadId, (uintptr_t) pthread_self(), memory_order_relaxed);
+
+    int rc = KERNEL_EXIT_OK;
+
+    // One-shot invokables: run to completion on the arming thread.
+    for (uint32_t i = 0; i < (*self).processCount; i++) {
+        Process *p = (*self).processes[i];
+        if (p) {
+            int r = Process_run(p, 0, nullptr);
+            if (r != 0 && rc == KERNEL_EXIT_OK)
+                rc = r;
+        }
+    }
+
+    // Session pumps + windowed apps: start without blocking — the reactor
+    // below supervises them to completion.
+    for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+        Console *c = (*self).consoles[i];
+        if (c)
+            (void) Console_run(c);
+    }
+    for (uint32_t i = 0; i < (*self).applicationCount; i++)
+        kernelStartApplication(self, (*self).applications[i]);
+
+    // COMPLETION REACTOR: drain deferred adds, pump OS events, supervise
+    // bounded console slices, ask app closed-state at a ~250ms cadence. 5ms
+    // per pass keeps teardown responsive (the Bounded Wait Law) without a
+    // busy spin.
+    const struct timespec park = {0, 5000000L};
+    uint64_t pass = 0;
+    while (atomic_load_explicit(&(*self).running, memory_order_relaxed) && !kernelAllDone(self)) {
+        kernelDrainDeferred(self);
+
+        Window_pollEvents();
+
+        char buf[4096];
+        for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+            Console *c = (*self).consoles[i];
+            if (!c || !Console_isRunning(c))
+                continue;
+            size_t n = 0;
+            if (Console_poll(c, buf, sizeof(buf), &n) && n > 0)
+                (void) fwrite(buf, 1, n, stdout);
+        }
+
+        if ((pass % 50) == 0) {
+            for (uint32_t i = 0; i < (*self).applicationCount; i++) {
+                Application *a = (*self).applications[i];
+                if (a && Application_isFinished(a))
+                    Application_stop(a);
+            }
+        }
+
+        nanosleep(&park, NULL);
+        pass++;
+    }
+
+    // Reactor exit: stop every kind still live so nothing outlives the run
+    // (mirrors Kernel_stop minus the external cancel), then best-effort-drain
+    // straggler deferred adds so the mailbox is empty, then disarm.
+    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
+        Application *a = (*self).applications[i];
+        if (a && Application_isRunning(a))
+            Application_stop(a);
+    }
+    kernelDrainDeferred(self);
+
+    atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
+    atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+
+    return rc;
+}
+
+int Kernel_runProcess(Kernel *self, Process *p) {
+    (void) self;
+    return p ? Process_run(p, 0, nullptr) : KERNEL_EXIT_NO_APPS;
+}
+
+bool Kernel_runConsole(Kernel *self, Console *c) {
+    (void) self;
+    return c ? Console_run(c) : false;
+}
+
+int Kernel_runApplication(Kernel *self, Application *a) {
+    if (!self || !a)
+        return KERNEL_EXIT_NO_APPS;
+    kernelStartApplication(self, a);
+
+    // Keep the app alive on its own: the blocking Application_run parked loop
+    // (hotcwap's own, graphvex-independent) lives until EVERY window is
+    // closed, then returns. graphvex's GfxLoop frame scheduler lands later
+    // and layers on top of this keep-alive — the Kernel never owns the loop
+    // either way.
+    Application_run(a);
+    return KERNEL_EXIT_OK;
+}
+
+// --- APPLICATION REGISTRY ---
+// Registration is the PRE-arm contract: while Kernel_runAll is live, the
+// arming thread's adds are refused (one warn) and other threads' adds post
+// to the deferred mailbox, admitted on the running thread's next pass.
+bool Kernel_addApplication(Kernel *self, Application *app) {
+    if (!self || !app)
+        return false;
+    if (kernelRunActive(self)) {
+        if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
+            fprintf(stderr, "kernel: Kernel_addApplication refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
+            return false;
+        }
+        return kernelPostDeferred(self, KERNEL_DEFERRED_APPLICATION, app);
+    }
+    return kernelAddApplicationInternal(self, app);
+}
+
 bool Kernel_removeApplication(Kernel *self, Application *app) {
     if (!self || !app)
         return false;
@@ -453,6 +514,60 @@ bool Kernel_removeApplication(Kernel *self, Application *app) {
         if ((*self).applications[i] == app) {
             (*self).applications[i] = (*self).applications[--(*self).applicationCount];
             (*self).applications[(*self).applicationCount] = NULL;
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- PROCESS REGISTRY ---
+bool Kernel_addProcess(Kernel *self, Process *p) {
+    if (!self || !p)
+        return false;
+    if (kernelRunActive(self)) {
+        if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
+            fprintf(stderr, "kernel: Kernel_addProcess refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
+            return false;
+        }
+        return kernelPostDeferred(self, KERNEL_DEFERRED_PROCESS, p);
+    }
+    return kernelAddProcessInternal(self, p);
+}
+
+bool Kernel_removeProcess(Kernel *self, Process *p) {
+    if (!self || !p)
+        return false;
+    for (uint32_t i = 0; i < (*self).processCount; i++) {
+        if ((*self).processes[i] == p) {
+            (*self).processes[i] = (*self).processes[--(*self).processCount];
+            (*self).processes[(*self).processCount] = NULL;
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- CONSOLE REGISTRY ---
+bool Kernel_addConsole(Kernel *self, Console *c) {
+    if (!self || !c)
+        return false;
+    if (kernelRunActive(self)) {
+        if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
+            fprintf(stderr, "kernel: Kernel_addConsole refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
+            return false;
+        }
+        return kernelPostDeferred(self, KERNEL_DEFERRED_CONSOLE, c);
+    }
+    return kernelAddConsoleInternal(self, c);
+}
+
+bool Kernel_removeConsole(Kernel *self, Console *c) {
+    if (!self || !c)
+        return false;
+    for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+        if ((*self).consoles[i] == c) {
+            (*self).consoles[i] = (*self).consoles[--(*self).consoleCount];
+            (*self).consoles[(*self).consoleCount] = NULL;
             return true;
         }
     }
@@ -475,14 +590,60 @@ uint32_t Kernel_getApplicationCount(const Kernel *self) {
 }
 
 uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t cap) {
-    if (!self)
+    if (!self || !out || cap == 0)
         return 0;
-    if (!out || cap == 0)
-        return 0;
-    uint32_t count = (*self).applicationCount;
-    uint32_t n = count < cap ? count : cap;
+    uint32_t n = (*self).applicationCount;
+    if (n > cap) n = cap;
     for (uint32_t i = 0; i < n; i++)
         out[i] = (*self).applications[i];
+    return n;
+}
+
+Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
+    if (!self)
+        return NULL;
+    if (index >= (*self).processCount)
+        return NULL;
+    return (*self).processes[index];
+}
+
+uint32_t Kernel_getProcessCount(const Kernel *self) {
+    if (!self)
+        return 0;
+    return (*self).processCount;
+}
+
+uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
+    if (!self || !out || cap == 0)
+        return 0;
+    uint32_t n = (*self).processCount;
+    if (n > cap) n = cap;
+    for (uint32_t i = 0; i < n; i++)
+        out[i] = (*self).processes[i];
+    return n;
+}
+
+Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
+    if (!self)
+        return NULL;
+    if (index >= (*self).consoleCount)
+        return NULL;
+    return (*self).consoles[index];
+}
+
+uint32_t Kernel_getConsoleCount(const Kernel *self) {
+    if (!self)
+        return 0;
+    return (*self).consoleCount;
+}
+
+uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
+    if (!self || !out || cap == 0)
+        return 0;
+    uint32_t n = (*self).consoleCount;
+    if (n > cap) n = cap;
+    for (uint32_t i = 0; i < n; i++)
+        out[i] = (*self).consoles[i];
     return n;
 }
 
