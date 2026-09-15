@@ -102,12 +102,12 @@ bool Console_run(Console *self) {
     if ((*self).running)
         return false;
     ConsoleIo *io = &(*self).io;
-    if (!io->spawn)
+    if (!(*io).spawn)
         return false;
 
     atomic_store_explicit(&(*self).cancel, false, memory_order_relaxed);
     (*self).exitStatus = 0;
-    bool ok = io->spawn(io->ctx, (*self).shell, (*self).workDir);
+    bool ok = (*io).spawn((*io).ctx, (*self).shell, (*self).workDir);
     (*self).running = ok;
     return ok;
 }
@@ -118,9 +118,9 @@ bool Console_writeInput(Console *self, const char *line, size_t len) {
     if (!(*self).running)
         return false;
     ConsoleIo *io = &(*self).io;
-    if (!io->feed)
+    if (!(*io).feed)
         return false;
-    return io->feed(io->ctx, line, len);
+    return (*io).feed((*io).ctx, line, len);
 }
 
 bool Console_poll(Console *self, char *out, size_t outCap, size_t *outLen) {
@@ -134,16 +134,16 @@ bool Console_poll(Console *self, char *out, size_t outCap, size_t *outLen) {
         return true;
     }
     ConsoleIo *io = &(*self).io;
-    if (!io->reap) {
+    if (!(*io).reap) {
         if (out && outCap > 0)
             out[0] = '\0';
         return true;
     }
     size_t n = 0;
-    bool ok = io->reap(io->ctx, out, outCap, &n);
+    bool ok = (*io).reap((*io).ctx, out, outCap, &n);
     if (outLen)
         *outLen = n;
-    if (io->joined && io->joined(io->ctx)) {
+    if ((*io).joined && (*io).joined((*io).ctx)) {
         (*self).running = false;
     }
     return ok;
@@ -154,8 +154,8 @@ void Console_cancel(Console *self) {
         return;
     atomic_store_explicit(&(*self).cancel, true, memory_order_relaxed);
     ConsoleIo *io = &(*self).io;
-    if (io->cancel)
-        io->cancel(io->ctx);
+    if ((*io).cancel)
+        (*io).cancel((*io).ctx);
 }
 
 void Console_free(Console *self) {
