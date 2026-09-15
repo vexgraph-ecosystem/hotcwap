@@ -20,6 +20,7 @@
  *   - HotManifest_parse(json, len, out)
  *   - HotManifest_compatible(old_manifest, new_manifest)
  *   - HotManifest_digest(manifest)
+ *   - HotManifest_allows(manifest, consumer, section)
  *
  * Getters:
  *   - HotManifest_get_type_id(manifest, name)
@@ -31,7 +32,8 @@
 //
 // This is a deliberately simple parser — no external dependencies.
 // It handles the specific manifest format we need:
-//   {"name": "...", "version": "...", "type_ids": [...], "exports": [...], "dependencies": [...]}
+//   {"name": "...", "version": "...", "type_ids": [...], "exports": [...], "dependencies": [...],
+//    "consumers": [{"name": "...", "runtime": "...", "sections": [...]}]}
 // Type rows carry {"name", "value"} plus optional "parent"/"size" in any order.
 
 // Skip whitespace
@@ -277,6 +279,87 @@ bool HotManifest_parse(const char *json, size_t len, HotManifest *out) {
                     (*out).dependency_count++;
                 }
             }
+        } else if (strcmp(key, "consumers") == 0) {
+            // Allow-list rows: {"name": "...", "runtime": "...",
+            // "sections": ["..."]} in any order. Unknown row keys skip like
+            // type rows. Overflow rows drop (bounded, no alloc).
+            if (*p != '[') return false;
+            p++;
+            while (p < end) {
+                p = skip_ws(p);
+                if (*p == ']') { p++; break; }
+                if (*p == ',') { p++; continue; }
+                if (*p != '{') return false;
+                p++;
+
+                HotConsumer row;
+                memset(&row, 0, sizeof(row));
+
+                while (p < end) {
+                    p = skip_ws(p);
+                    if (*p == '}') { p++; break; }
+                    if (*p == ',') { p++; continue; }
+                    char ckey[32];
+                    p = parse_string(p, ckey, sizeof(ckey));
+                    if (!p) return false;
+                    p = skip_ws(p);
+                    if (*p != ':') return false;
+                    p++;
+                    p = skip_ws(p);
+                    if (strcmp(ckey, "name") == 0) {
+                        char cname[64];
+                        bool is_hex = false;
+                        p = parse_value(p, cname, sizeof(cname), nullptr, &is_hex);
+                        if (!p) return false;
+                        strncpy(row.name, cname, HOT_MANIFEST_MAX_NAME - 1);
+                    } else if (strcmp(ckey, "runtime") == 0) {
+                        char cruntime[64];
+                        bool is_hex = false;
+                        p = parse_value(p, cruntime, sizeof(cruntime), nullptr, &is_hex);
+                        if (!p) return false;
+                        strncpy(row.runtime, cruntime, HOT_MANIFEST_MAX_RUNTIME - 1);
+                    } else if (strcmp(ckey, "sections") == 0) {
+                        if (*p != '[') return false;
+                        p++;
+                        while (p < end) {
+                            p = skip_ws(p);
+                            if (*p == ']') { p++; break; }
+                            if (*p == ',') { p++; continue; }
+                            char sec[64];
+                            bool is_hex = false;
+                            p = parse_value(p, sec, sizeof(sec), nullptr, &is_hex);
+                            if (!p) return false;
+                            if (row.section_count < HOT_MANIFEST_MAX_CONSUMER_SECTIONS) {
+                                strncpy(row.sections[row.section_count], sec, HOT_MANIFEST_MAX_NAME - 1);
+                                row.section_count++;
+                            }
+                        }
+                    } else {
+                        if (*p == '"') {
+                            char dummy[64];
+                            bool is_hex = false;
+                            p = parse_value(p, dummy, sizeof(dummy), nullptr, &is_hex);
+                        } else if (*p == '[') {
+                            p++;
+                            int depth = 1;
+                            while (p < end && depth > 0) {
+                                if (*p == '[') depth++;
+                                else if (*p == ']') depth--;
+                                p++;
+                            }
+                        } else {
+                            uint64_t dummy = 0;
+                            bool is_hex = false;
+                            p = parse_value(p, nullptr, 0, &dummy, &is_hex);
+                        }
+                        if (!p) return false;
+                    }
+                }
+
+                if ((*out).consumer_count < HOT_MANIFEST_MAX_CONSUMERS) {
+                    (*out).consumers[(*out).consumer_count++] = row;
+                }
+            }
         } else {
             // Unknown key — skip value
             if (*p == '"') {
@@ -396,4 +479,22 @@ uint64_t HotManifest_get_type_id(const HotManifest *manifest, const char *name) 
     }
     
     return 0;
+}
+
+bool HotManifest_allows(const HotManifest *manifest, const char *consumer, const char *section) {
+    if (!manifest || !consumer)
+        return false;
+    for (uint32_t i = 0; i < (*manifest).consumer_count; i++) {
+        const HotConsumer *row = &(*manifest).consumers[i];
+        if (strcmp((*row).name, consumer) != 0)
+            continue;
+        if (section == nullptr)
+            return true;
+        for (uint32_t s = 0; s < (*row).section_count; s++) {
+            if (strcmp((*row).sections[s], section) == 0)
+                return true;
+        }
+        return false;
+    }
+    return false;
 }
