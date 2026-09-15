@@ -8,9 +8,9 @@
 #include <pthread.h>
 
 #include "spoke/vexspoke.h"
-#include "process/application.h"
-#include "process/console.h"
-#include "process/process.h"
+#include "application.h"
+#include "console.h"
+#include "process.h"
 
 // kernel/kernel.h — R1 Host Supervisor: storage + dispatch, never an executor.
 //

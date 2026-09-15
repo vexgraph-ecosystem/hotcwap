@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-// process/console.h — Session state machine for shell scripts / REPL sessions.
+// kernel/console.h — Session state machine for shell scripts / REPL sessions.
 //
 // Console owns the session lifecycle (shell/workDir, running flag, cancel
 // flag, exit status) and borrows execution through an injectable ConsoleIo

@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// process/process.h — One-shot hot-loadable function wrapper.
+// kernel/process.h — One-shot hot-loadable function wrapper.
 //
 // A Process wraps a single `main`-shaped entry (ProcessEntry): invoke it
 // on the caller's thread, it runs to completion, returns an exit status.

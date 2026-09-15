@@ -29,9 +29,9 @@ if(NOT TARGET hotcwap)
 # vk_loader bridge) has moved to graphvex. hotcwap holds no Vulkan code and
 # owns only the OS window + event registry seam that graphvex presents into.
 add_library(hotcwap STATIC
-    process/application.c
-    process/process.c
-    process/console.c
+        kernel/application.c
+        kernel/process.c
+        kernel/console.c
     kernel/kernel.c
     spoke/vexspoke.c
     hot/hot.c

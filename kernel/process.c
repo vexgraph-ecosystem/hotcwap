@@ -1,4 +1,4 @@
-#include "process/process.h"
+#include "process.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 ;;OVERVIEW
 /**
  * ============================================================================
- * CLASS: Process (process/process.c)
+ * CLASS: Process (kernel/process.c)
  * LEVEL: L2 — Behavior (one-shot hot-loadable function wrapper)
  * ============================================================================
  * A Process wraps a single `main`-shaped entry: invoke, run to completion,
@@ -19,7 +19,7 @@
  * call is in flight. One Process = one function; never ticked, never owns a
  * window, a thread, or a socket.
  *
- * STRUCT FIELDS (Mirroring process/process.h — exactly this file's class):
+ * STRUCT FIELDS (Mirroring kernel/process.h — exactly this file's class):
  * ----------------------------------------------------------------------------
  *   ProcessEntry entry;             // hot-bound entry fn (null = unbound)
  *   void *hot;                      // opaque retire pin (the Conflict Triage Law seam)

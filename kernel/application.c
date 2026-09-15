@@ -1,4 +1,4 @@
-#include "process/application.h"
+#include "application.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +14,7 @@
 ;;OVERVIEW
 /**
  * ============================================================================
- * CLASS: Application (process/application.c)
+ * CLASS: Application (kernel/application.c)
  * LEVEL: L2 — Behavior (executable identity, window registry & hot-module slot)
  * ============================================================================
  * The manifest for a running executable: name, author, version, icon, and the
@@ -24,7 +24,7 @@
  * Kernel (R1) drives the event pump and observes the running flag; graphvex
  * (R3) drives frame scheduling, presentation, and telemetry writes.
  *
- * STRUCT FIELDS (Mirroring process/application.h — exactly this file's class):
+ * STRUCT FIELDS (Mirroring kernel/application.h — exactly this file's class):
  * ----------------------------------------------------------------------------
  *   char name[APP_MAX_NAME];               // app name (default "vex")
  *   char author[APP_MAX_NAME];             // author / studio (default "")

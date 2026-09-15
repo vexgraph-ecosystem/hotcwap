@@ -1,4 +1,4 @@
-#include "process/console.h"
+#include "console.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 ;;OVERVIEW
 /**
  * ============================================================================
- * CLASS: Console (process/console.c)
+ * CLASS: Console (kernel/console.c)
  * LEVEL: L2 — Behavior (session state machine; execution borrowed from R2)
  * ============================================================================
  * Session state machine for shell scripts and REPL-style interactions.  Owns
@@ -23,7 +23,7 @@
  * supervising Kernel thread drives Console_poll in bounded <=100ms slices
  * with a cancel flag (the Bounded Wait Law).  Console never touches a window.
  *
- * STRUCT FIELDS (Mirroring process/console.h — exactly this file's class):
+ * STRUCT FIELDS (Mirroring kernel/console.h — exactly this file's class):
  * ----------------------------------------------------------------------------
  *   char shell[CONSOLE_MAX_SHELL];          // command to run (default "/bin/sh")
  *   char workDir[CONSOLE_MAX_WORKDIR];      // working directory (default "")

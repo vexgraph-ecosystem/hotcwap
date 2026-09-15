@@ -9,7 +9,7 @@
 #include "hot/hot.h"
 #include "window/window.h"
 
-// process/application.h — Executable-level manifest, window registry & hot-module slot.
+// kernel/application.h — Executable-level manifest, window registry & hot-module slot.
 //
 // Application is a pure manifest: identity (name/author/version/icon), the
 // window registry, and a hot-module slot. Application is GUI by definition —
