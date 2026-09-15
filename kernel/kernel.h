@@ -12,7 +12,7 @@
 #include "process/console.h"
 #include "process/process.h"
 
-// kernel/kernel.h — R0 Host Supervisor: storage + dispatch, never an executor.
+// kernel/kernel.h — R1 Host Supervisor: storage + dispatch, never an executor.
 //
 // The Kernel is an object that STORES registries and SENDS work. It holds the
 // master arena, the transient scratch arena, and the three per-kind registries

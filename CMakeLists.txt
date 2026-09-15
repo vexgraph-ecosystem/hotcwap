@@ -25,9 +25,9 @@ if(NOT TARGET hotcwap)
 # A window never hot-updates — it is owned by the OS — so it lives here,
 # next to the loader that persists across module swaps.
 #
-# NOTE: Vulkan core (instance/device/swapchain/pane/surface) has moved to
-# graphvex. hotcwap keeps only the Window seam glue (vk_loader.c bridges
-# kernel.c <-> graphvex's Vk_* API).
+# NOTE: Vulkan core (instance/device/swapchain/pane/surface, including the
+# vk_loader bridge) has moved to graphvex. hotcwap holds no Vulkan code and
+# owns only the OS window + event registry seam that graphvex presents into.
 add_library(hotcwap STATIC
     process/application.c
     process/process.c
@@ -46,8 +46,8 @@ target_compile_options(hotcwap PRIVATE -Wall -Wextra -Werror)
 
 # Phase-1 L2 behavior subject: pure pulse/bar math + texture path.
 # Host handlers delegate here; module holds no GPU/Panel state so swap is
-# safe by construction. Output lands in ${CMAKE_BINARY_DIR}/hot next to
-# vk_test's watch dir; copy to ./hot/ when running from the source root.
+# safe by construction. Output lands in ${CMAKE_BINARY_DIR}/hot next to the
+# umbrella test_suite's watch dir; copy to ./hot/ when running from source.
 add_library(hot_behavior MODULE hot/hot_behavior.c)
 target_include_directories(hot_behavior PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

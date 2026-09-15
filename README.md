@@ -1,4 +1,4 @@
-# hotcwap. hot-c-wap. R0 Kernel Host — thin nano-VM.
+# hotcwap. hot-c-wap. R1 Host Supervisor — thin nano-VM.
 
 Zero-downtime dynamic module hot-reloading, persistent OS windowing, and process supervision.
 
@@ -21,26 +21,26 @@ In conventional game architectures, window management and simulation loops are t
 
 ## Workspace Integration & How to Use It
 
-`hotcwap` sits at R0 in the `vexgraph` supervisor order (Rule 17: `R0 hotcwap > R1 vexspoke > R1.5 graphvex > R2 features > R3 engines`). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines:
+`hotcwap` sits at R1 Host in the `vexgraph` supervisor order (the Vertical Integration Law: `R1 hotcwap > R2 vexspoke > R3 graphvex/api-haven/language/darkbase > R4 darling-framework/sesh > R5 engines`). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines:
 
 ```
 workspace/
 ├── cmake-build-debug/           # Out-of-tree CMake build artifacts & staged SPVs
 ├── projects/                    # Vertically integrated subsystem repositories
-│   ├── hotcwap/                 # R0 Kernel Host: nano-VM (this library)
+│   ├── hotcwap/                 # R1 Host: nano-VM (this library)
 │   │   ├── kernel/              # Kernel {arena, transientArena, applications[]} supervisor
-│   │   ├── app/                 # Application {CLI/TUI/GUI} + windows[APP_MAX_WINDOWS]
-│   │   └── window/              # OS window, AppKit Cocoa bridge, loader
-│   ├── vexspoke/                # R1 Spoke: relational C23 runtime (shapes Kernel borrows)
-│   ├── graphvex/                # R1.5 GPU compute, SPIR-V, fonts
-│   ├── darling/                 # R2 feature: UI tree (registers via Application)
-│   ├── api-haven/               # R2 feature: telemetry (registers via callbacks)
-│   └── [R3 engines register as Applications: vex-engine, mini-ide, daw, ...]
+│   │   ├── process/             # Process taxonomy: process, application, console
+│   │   └── window/              # OS window, AppKit Cocoa bridge, event registry
+│   ├── vexspoke/                # R2 Behavior: relational C23 runtime (shapes Kernel borrows)
+│   ├── graphvex/                # R3 Driver: GPU compute, SPIR-V, fonts
+│   ├── darling-framework/       # R4 Interface: UI tree (registers via Application)
+│   ├── api-haven/               # R3 Driver: telemetry/connectors (registers via callbacks)
+│   └── [R5 engines register as Applications: vex-engine, mini-ide, daw, ...]
 ├── CMakeLists.txt               # Umbrella workspace orchestrator
 └── preferences.md               # Engine architectural style preferences (Rules 1–n, supreme)
 ```
 
-### Kernel lifecycle (the 7 steps — vk_test order)
+### Kernel lifecycle (the 7 steps — test_suite order)
 
 ```c
 Kernel *k = Kernel();              // 1. kernel: master + transient arenas
@@ -85,7 +85,7 @@ target_link_libraries(my_app PRIVATE hotcwap)
 
 ## What's in this repo
 
-* **`kernel/kernel.h/.c`** — R0 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
+* **`kernel/kernel.h/.c`** — R1 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
 * **`process/`** — Process taxonomy: `process` (one-shot invocable), `application` (executable identity + window registry + hot-module slot), `console` (tty/session pump).
 * **`spoke/vexspoke.h/.c`** — R1→R2 bridge contract: the `VexspokeApi` fn-table (arena + input rings, opaque handles, type-attested). The single seam including vexspoke headers — `kernel/` names no vexspoke type.
 * **`window/window.h/.c`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
@@ -94,7 +94,7 @@ target_link_libraries(my_app PRIVATE hotcwap)
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — Dynamic file manifest tracker and change detector.
 * **`MANIFEST.mf`** — Provider allow-list seed (HotManifest JSON): which vexspoke-based projects may bind, with granted sections. Add a consumer row here to admit a new project; no code swap. Not Java — see `spoke/MANIFEST.md`.
-* **`main/vk_test.c`** & **`tests/window_test.c`** — Verification test harnesses for Cocoa window creation, event polling, and dynamic library swapping.
+* **`main/test_suite.c`** (umbrella root) & **`_tests/hotcwap/`** — Verification harnesses: `manifest_test`, `spoke_test`, `window_event_test`, `window_test` for manifest parsing, spoke bridging, event dispatch, window creation, and dynamic library swapping.
 
 ---
 
