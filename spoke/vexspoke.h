@@ -61,9 +61,9 @@ typedef struct VexspokeApi {
     void (*keyDetachWindowAll)(uint32_t windowId);
     void (*keyPushEvent)(uint32_t windowId, int keyCode, int action, uint64_t holdThresholdNanos);
     void (*keyPushCharEvent)(uint32_t windowId, uint32_t c);
-    void (*keyDispatchEvents)(void);
+    void (*keyDispatchEvents)();
     bool (*keyIsDown)(int keyCode);
-    void (*keyShutdown)(void);
+    void (*keyShutdown)();
 
     // --- rings section: mouse ---
     void (*mouseAttachWindow)(uint32_t windowId, const void *listener);
@@ -75,8 +75,8 @@ typedef struct VexspokeApi {
     void (*mousePushDragEvent)(uint32_t windowId, int button, double x, double y);
     void (*mousePushScrollEvent)(uint32_t windowId, double dx, double dy);
     void (*mousePushZoomEvent)(uint32_t windowId, double magnification);
-    void (*mouseDispatchEvents)(void);
-    double (*mouseX)(void);
+    void (*mouseDispatchEvents)();
+    double (*mouseX)();
 
     // --- rings section: touch ---
     void (*touchAttachWindow)(uint32_t windowId, const void *listener);
@@ -84,7 +84,7 @@ typedef struct VexspokeApi {
     void (*touchDetachWindowAll)(uint32_t windowId);
     void (*touchPushTouchEvent)(uint32_t windowId, int touchId, int action, double x, double y,
                                 double pressure, uint64_t holdThresholdNanos);
-    void (*touchDispatchEvents)(void);
+    void (*touchDispatchEvents)();
 
     // --- rings section: focus ---
     void (*focusSet)(uint32_t windowId);
