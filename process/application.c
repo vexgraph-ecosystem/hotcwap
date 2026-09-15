@@ -34,9 +34,8 @@
  *   Window *windows[APP_MAX_WINDOWS];      // registered top-level windows
  *   uint32_t window_count;                 // used slots in windows[]
  *   _Atomic bool running;                  // runtime active flag (Kernel writes, graphvex reads)
- *   HotModule *hot;                        // dynamic module watcher (opt-in via setHot)
- *   SpvWatch *spvWatch;                    // SPIR-V shader watcher (opt-in)
- *   _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
+  *   HotModule *hot;                        // dynamic module watcher (opt-in via setHot)
+  *   _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
  *   _Atomic uint32_t frametimeUs;          // live telemetry: frametime in microseconds
  *   AppHotReloadFn hotReloadFn;            // hot-reload notification callback (nullable)
  *   void *hotReloadUserdata;               // userdata for hotReloadFn
@@ -80,9 +79,8 @@
  * Telemetry:
  *   - Application_getFps(self)             // graphvex writes, Application reads
  *   - Application_getFrametimeUs(self)
- *   - Application_getHot(self)
- *   - Application_getSpvWatch(self)
- *
+  *   - Application_getHot(self)
+  *
  * Setters:
  *   - Application_setName(self, name)
  *   - Application_setAuthor(self, author)
@@ -264,10 +262,6 @@ uint32_t Application_getFrametimeUs(const Application *self) {
 
 HotModule *Application_getHot(const Application *self) {
     return self ? (*self).hot : nullptr;
-}
-
-SpvWatch *Application_getSpvWatch(const Application *self) {
-    return self ? (*self).spvWatch : nullptr;
 }
 
 void Application_setHot(Application *self, HotModule *hot) {

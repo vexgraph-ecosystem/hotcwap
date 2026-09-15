@@ -7,7 +7,6 @@
 #include <stdatomic.h>
 
 #include "hot/hot.h"
-#include "hot/spv_watch.h"
 #include "window/window.h"
 
 // process/application.h — Executable-level manifest, window registry & hot-module slot.
@@ -51,7 +50,6 @@ struct Application {
     uint32_t window_count;                 // used slots in windows[]
     _Atomic bool running;                  // runtime active flag (Kernel writes, graphvex reads)
     HotModule *hot;                        // dynamic module watcher (opt-in via Application_setHot)
-    SpvWatch *spvWatch;                    // SPIR-V shader watcher (opt-in)
     _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
     _Atomic uint32_t frametimeUs;          // live telemetry: frametime in microseconds (graphvex writes)
     AppHotReloadFn hotReloadFn;            // hot-reload notification callback (nullable)
@@ -112,7 +110,6 @@ void Application_onHotReload(Application *self, AppHotReloadFn fn, void *userdat
 uint32_t   Application_getFps(const Application *self);
 uint32_t   Application_getFrametimeUs(const Application *self);
 HotModule *Application_getHot(const Application *self);
-SpvWatch  *Application_getSpvWatch(const Application *self);
 // Opt-in: assign a pre-initialized HotModule to enable hot-reload for this
 // application. NULL disables.
 void        Application_setHot(Application *self, HotModule *hot);
