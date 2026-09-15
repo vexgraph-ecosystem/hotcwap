@@ -57,9 +57,10 @@ struct Application {
 };
 
 // --- Subsystem bootstrap & shutdown ---
-// One-shot bootstrap (System/VFS/fonts). Auto-invoked by the FIRST
-// Application() constructor; idempotent beyond that. Explicit calls are
-// optional and redundant. Teardown (Application_shutdown) stays caller-owned.
+// One-shot bootstrap (System/input/HotFile via System_initializeAll).
+// Auto-invoked by the FIRST Application() constructor; idempotent beyond
+// that. Explicit calls are optional and redundant. Teardown
+// (Application_shutdown) stays caller-owned.
 bool Application_init(void);
 void Application_shutdown(void);
 

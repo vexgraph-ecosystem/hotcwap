@@ -9,7 +9,6 @@
 #include "annotation/intention.h"
 #include "annotation/overview.h"
 #include "input/key.h"
-#include "io/vfs.h"
 #include "system/system.h"
 
 ;;OVERVIEW
@@ -34,8 +33,8 @@
  *   Window *windows[APP_MAX_WINDOWS];      // registered top-level windows
  *   uint32_t window_count;                 // used slots in windows[]
  *   _Atomic bool running;                  // runtime active flag (Kernel writes, graphvex reads)
-  *   HotModule *hot;                        // dynamic module watcher (opt-in via setHot)
-  *   _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
+ *   HotModule *hot;                        // dynamic module watcher (opt-in via setHot)
+ *   _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
  *   _Atomic uint32_t frametimeUs;          // live telemetry: frametime in microseconds
  *   AppHotReloadFn hotReloadFn;            // hot-reload notification callback (nullable)
  *   void *hotReloadUserdata;               // userdata for hotReloadFn
@@ -57,8 +56,9 @@
  *   - Application()                        : Application_0()
  *   - Application(name)                    : Application_1(name)
  *   - Application(name, author, version)   : Application_3(name, author, version)
- *     First constructor ALSO runs the one-shot bootstrap (System/VFS/fonts);
- *     init is the constructor's job — callers only construct then free.
+ *     First constructor ALSO runs the one-shot bootstrap (System/input/
+ *     HotFile via System_initializeAll); init is the constructor's job —
+ *     callers only construct then free.
  *
  * Core Functions:
  *   - Application_init()       : one-shot bootstrap (already run by constructor)
@@ -104,16 +104,18 @@
 // Plain bool, not _Atomic: construction is single-threaded cold-path (the Cold-Strict, Hot-Minimal Validation Law).
 static bool s_bootstrapped = false;
 
-bool Application_init(void) {
+bool Application_init() {
     if (s_bootstrapped)
         return true;
     s_bootstrapped = true;
     System_initializeAll();
-    Vfs_init();
+    // NOTE: no Vfs_init() here by design — the VFS lives in darling R4
+    // (io/vfs.c) since the split and boots itself once UI paths resolve.
+    // R1 never reaches up the stack (the Vertical Integration Law).
     return true;
 }
 
-void Application_shutdown(void) {
+void Application_shutdown() {
     Key_shutdown();
 }
 
@@ -153,21 +155,21 @@ static void appParkSlice(const Application *self) {
 Application *Application_0(void) {
     Application_init();
     Application *self = (Application*) calloc(1, sizeof(Application));
-    if (!self) return NULL;
+    if (!self) return nullptr;
     strncpy((*self).name, "vex", APP_MAX_NAME - 1);
     return self;
 }
 
 Application *Application_1(const char *name) {
     Application *self = Application_0();
-    if (!self) return NULL;
+    if (!self) return nullptr;
     Application_setName(self, name);
     return self;
 }
 
 Application *Application_3(const char *name, const char *author, const char *version) {
     Application *self = Application_0();
-    if (!self) return NULL;
+    if (!self) return nullptr;
     Application_setName(self, name);
     Application_setAuthor(self, author);
     Application_setVersion(self, version);
@@ -237,7 +239,7 @@ bool Application_removeWindow(Application *self, Window *win) {
     for (uint32_t i = 0; i < (*self).window_count; i++) {
         if ((*self).windows[i] == win) {
             (*self).windows[i] = (*self).windows[--(*self).window_count];
-            (*self).windows[(*self).window_count] = NULL;
+            (*self).windows[(*self).window_count] = nullptr;
             return true;
         }
     }
@@ -296,28 +298,28 @@ void Application_setIconPath(Application *self, const char *iconPath) {
 
 // GETTERS
 const char *Application_getName(const Application *self) {
-    if (!self) return NULL;
+    if (!self) return nullptr;
     return (*self).name;
 }
 
 const char *Application_getAuthor(const Application *self) {
-    if (!self) return NULL;
+    if (!self) return nullptr;
     return (*self).author;
 }
 
 const char *Application_getVersion(const Application *self) {
-    if (!self) return NULL;
+    if (!self) return nullptr;
     return (*self).version;
 }
 
 const char *Application_getIconPath(const Application *self) {
-    if (!self) return NULL;
+    if (!self) return nullptr;
     return (*self).iconPath;
 }
 
 Window *Application_getWindow(const Application *self, uint32_t index) {
-    if (!self) return NULL;
-    if (index >= (*self).window_count) return NULL;
+    if (!self) return nullptr;
+    if (index >= (*self).window_count) return nullptr;
     return (*self).windows[index];
 }
 
