@@ -15,8 +15,8 @@
  * Phase-2 L2/L3 behavior subject: pure pulse/bar math + texture path.
  *
  * Deliberately stateless-on-GPU: this module NEVER calls Vk_* or touches
- * the Panel tree. Host handlers (main/vk_test.c) own cmdBuffer + Panel
- * pointers and delegate only the math here. That keeps swap safe by
+ * the Panel tree. Host handlers (main/test_suite.c, _tests/hotcwap/) own
+ * cmdBuffer + Panel pointers and delegate only the math here. That keeps swap safe by
  * construction — no code pointers cross the dylib boundary, no dangling
  * renderHandler after dlclose.
  *
@@ -141,5 +141,8 @@ void hot_behavior_bar(float w, float h, float pulse, float *outBarH, float *outB
 }
 
 const char *hot_texture_path(void) {
-    return "/Users/vexgraph/Downloads/sunflower.png";
+    // Portable asset-relative path: the host resolves this against its asset
+    // root (never an absolute developer-machine path — those break every
+    // other checkout and leak local filesystem layout).
+    return "assets/sunflower.png";
 }
