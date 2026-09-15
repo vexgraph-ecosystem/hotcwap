@@ -1,12 +1,15 @@
 # The MANIFEST(...) Install Layout — hotcwap's "Manifest Binary Way"
 
 `hot/manifest.h/.c` is the per-app **install-layout authority**. The
-manifest is the on-disk install tree itself — there is no separate policy
-file to keep in sync. `MANIFEST.mf` (the old JSON seed) is retired.
+manifest is the on-disk install tree **plus** the `manifest.json` library
+catalog — the plain-JSON file any runtime (the downloader) edits. There is no
+proprietary policy seed to keep in sync; `MANIFEST.mf` (the old JSON seed) is
+retired.
 
-This document describes the process: how the path resolves, what the ladder
-holds, how first-run reflection works, and how the two update experiences
-(hot swap while running, cold swap on next launch) share the same tree.
+This document describes the process: how the path resolves, what the catalog
+declares, what the ladder holds, how first-run reflection works, and how the
+two update experiences (hot swap while running, cold swap on next launch)
+share the same tree.
 
 ---
 
@@ -30,66 +33,116 @@ risk (this is the seam the manifest smoke tests use).
 ## 2. `MANIFEST(...)` — one-time init
 
 ```c
-bool MANIFEST(const char *first, ...);   // varargs, NULL-terminated
+bool MANIFEST(ManifestRoot kind, const char *org, const char *app);
 ```
 
 ```c
-MANIFEST("semicolon", (const char*) 0);
+MANIFEST(MANIFEST_APP_DATA, "vexgraph", "semicolon");
 // → macOS:   ~/Library/Application Support/vexgraph/semicolon/
 // → Windows: %LOCALAPPDATA%\vexgraph\semicolon\
 ```
 
-- The org segment (`MANIFEST_ORG` = `vexgraph`) is **always** appended if
-  missing — the ecosystem nests every install under one org folder.
-- Each vararg segment is appended **and its directory created** as it goes
-  ("will make a folder during that time").
+- The org segment defaults to `MANIFEST_ORG` = `vexgraph` when `org` is null
+  or empty — the ecosystem nests every install under one org folder.
 - **`MANIFEST(...)` is one-shot.** A second call returns `false`. The root
   locks for the whole process — two launchers can never mount the same
   ladder. On failure the mount clears and the app may retry; after success
   the root is frozen.
+- Seeding: when `<root>/manifest.json` is absent, `MANIFEST(...)` writes the
+  catalog `{name, version, org, libraries{}}` (name = app, default version
+  `0.1.0`, org = resolved org). An existing catalog is parsed and kept —
+  never overwritten.
 - `MANIFEST_ROOT()` returns the locked buffer (`nullptr` before the init).
 
-## 3. The ladder
+## 3. The catalog (`manifest.json`)
+
+The **downloader owns the section arrays**. `MANIFEST_LIBRARY(...)` registers
+the hosted library **keys** with empty lists; the downloader edits
+`manifest.json` to grow a key's section list **before** staging any payload
+that ships those sections, so `MANIFEST_UPDATE` only ever verifies against
+declared sections (fail-closed).
+
+```json
+{
+  "name": "semicolon",
+  "version": "0.1.0",
+  "org": "vexgraph",
+  "libraries": {
+    "vexspoke": ["io", "memory", "types"],
+    "graphvex": ["buffer", "texture", "spv"]
+  }
+}
+```
+
+Dylib naming is automatic from the stem: section `"io"` ships as `io.dylib`
+(Apple) / `io.dll` (Windows) / `libio.so` (Linux). `manifest.c` carries a
+self-contained bounded JSON reader/writer — R1 stays inside its allowlist
+(no `net/json` dependency; standalone hotcwap builds stay green).
+
+Registering keys (must run after `MANIFEST(...)` — the `;;INTENTION` in
+`manifest.c`):
+
+```c
+bool MANIFEST_LIBRARY(const char *first, ...);   // ends (const char*) 0
+MANIFEST_LIBRARY("vexspoke", "graphvex", (const char*) 0);
+```
+
+Each key gets its per-library ladder subfolders in every slot, created here
+(and again by `MANIFEST_ENSURE`). A second registration of the same key is a
+no-op.
+
+## 4. The ladder
 
 `MANIFEST_ENSURE()` creates the full tree:
 
 ```
-<root>/vexgraph/<app>/
-├── bin/
-│   ├── backward/    ← oldest retained set (rollback keeper)
-│   ├── previous/    ← prior generation (rollback)
-│   ├── current/     ← the runnable set — what the launcher dlopens
-│   └── new/         ← staged future set (downloads land here)
-├── hot/             ← MODE-1 watch dir: Hot_poll watches here for dylibs
-└── cache/           ← cache system
+<root>/manifest.json        ← catalog (libraries → section stems)
+<root>/bin/
+│   ├── backward/           ← oldest retained set (rollback keeper)
+│   │   └── <library>/      ← ONE generation set PER library
+│   ├── previous/           ← prior generation (rollback), per library
+│   ├── current/            ← the runnable set — what the launcher dlopens
+│   │   └── <library>/ ...
+│   └── new/                ← staged future set (downloads land here)
+├── hot/                    ← MODE-1 watch dir: Hot_poll watches here for dylibs
+└── cache/                  ← cache system
 ```
 
-Slot paths via `ManifestPath_ladderDir(slot, dest, cap, create)` where
-`slot` is `MANIFEST_LADDER_BACKWARD|PREVIOUS|CURRENT|NEW`; `ManifestPath_hotDir`
-and `ManifestPath_cacheDir` resolve the other two.
+Slot paths via `ManifestPath_ladderDir(slot, dest, cap, create)`; the
+per-library path is `ManifestPath_libraryDir(slot, library, dest, cap,
+create)` (validates the library name against a path-safe charset).
+`ManifestPath_hotDir`, `ManifestPath_cacheDir` and
+`ManifestPath_manifestJson` resolve the other three.
 
-## 4. First-run reflection (`MANIFEST_IS_FIRST_RUN` / `MANIFEST_REFLECT`)
+## 5. First-run reflection (`MANIFEST_IS_FIRST_RUN` / `MANIFEST_REFLECT`)
 
-First time the process opens (no `<current>/.install-mark`), the launcher:
+First time the process opens (no `<current>/.install-mark`), the launcher
+reflects each hosted library from its bundled payload:
 
-1. `MANIFEST_REFLECT(sourceDir)` — copy `sourceDir` payloads into
-   `bin/current` via per-file temp + atomic `rename` (`.name.reflect` →
-   `name`), then drop the fingerprint `MANIFEST_MARK`.
-2. `MANIFEST_IS_FIRST_RUN()` flips from `true` to `false`.
+```c
+MANIFEST_REFLECT("vexspoke", "/path/to/bundled/vexspoke");
+```
+
+Per library: **seed the section list** in `manifest.json` from the payload's
+top-level stems, **copy the payload** into `bin/current/<library>` (per-file
+temp + atomic `rename`, `.name.stage` → `name`), and drop the **per-library
+fingerprint** under `<current>/.install-mark/<library>`. Idempotent via that
+fingerprint; on copy failure it returns `false` and the launcher retries
+next launch. `MANIFEST_IS_FIRST_RUN()` flips from `true` to `false` once the
+`.install-mark` directory exists.
 
 The `.app` or `.exe` shell stays **frozen** — it is the loadable stub. The
 behavior — all dylibs, `.spv` blobs, fonts, config — lives in the manifest
-tree under `current/`. The OS binary never mutates on disk; the behavior
-set does. (`MANIFEST_REFLECT` is idempotent via the mark; on copy failure
-it returns `false` and the launcher retries next launch.)
+tree under `current/<library>/`. The OS binary never mutates on disk; the
+behavior set does.
 
-## 5. Two update experiences (the "hot c wap")
+## 6. Two update experiences (the "hot c wap")
 
-Both modes share the ladder and the same `MANIFEST_UPDATE()` gate: the
-staged set in `bin/new` must have content before any promotion is allowed.
-The older `HotStage_verify` (JSON `hot.manifest` schema + `files.sha`
-FNV-1a) is retired — vexspoke validates content before placing payloads
-into `bin/new`; the verb checks the ladder state.
+Both modes share the ladder and the same verification contract: every
+top-level payload entry must be a **declared section** of the target library
+(stem match by name, extension stripped). An undeclared entry refuses the
+WHOLE update — never a partial stage. The older `HotStage_verify` (JSON
+`hot.manifest` schema + `files.sha` FNV-1a) is retired.
 
 ### MODE 1 — HOT SWAP (app running)
 
@@ -101,20 +154,26 @@ gate. Zero restart, `current/` stays pinned during the swap.
 
 ### MODE 2 — COLD SWAP (app closed)
 
-The staged set sits verified in `bin/new`. On exit (or guarded wipe of the
-live set) the launcher calls:
+The downloader drops a staged set into `bin/new/<library>`, then the launcher
+verifies and promotes:
 
 ```c
-bool ok = MANIFEST_UPDATE();   // verify staged set — never promotes alone
-bool ok = MANIFEST_PROMOTE();  // slide the ladder:
-                               //   previous → backward (oldest dropped)
-                               //   current  → previous
-                               //   new      → current
+bool ok = MANIFEST_UPDATE("vexspoke", payloadDir);
+// verify every payload entry is a DECLARED section of "vexspoke", then
+// stage (replace) bin/new/vexspoke — verify only, never promotes.
+
+bool ok = MANIFEST_PROMOTE();
+// per-library slide for every library with a staged set:
+//   current → previous → backward (oldest dropped)
+//   new     → current
+// Libraries with no staged set stay pinned.
 ```
 
+- `MANIFEST_UPDATE` stages into `bin/new/<library>`, replacing any prior
+  staged set; fail-closed per the Cold-Strict, Hot-Minimal Validation Law.
 - `MANIFEST_PROMOTE` is **renames only** — atomic on the same filesystem,
-  never a copy, never a partial bind. Each step either completes or returns
-  `false` with the prior generation still intact.
+  never a copy, never a partial bind. Each library slides independently;
+  a failing library applies nothing.
 - With nothing staged it is an idempotent no-op (returns `true`).
 - If everything compiles and verifies, the *next launch loads the new set*.
   The `.app` shell you run again is the same stub; the `current/` set it
@@ -123,19 +182,20 @@ bool ok = MANIFEST_PROMOTE();  // slide the ladder:
   this: not by rewriting the OS binary (impossible — mmap pins it), but by
   sliding the layout the stub resolves.
 
-## 6. The old policy file
+## 7. The old policy file
 
 `MANIFEST.mf` (repo root) and `spoke/MANIFEST.md` are retired. The
 `consumers[]` allow-list that governed which projects may bind vexspoke now
 reads as a **documented baseline** in `spoke/vexspoke.h` — the authority for
-what may board is the on-disk install ladder alone (vexspoke downloads →
-`bin/new` → `MANIFEST_UPDATE` → `MANIFEST_PROMOTE`), never a JSON seed
-sitting next to the source.
+what may board is the on-disk install ladder plus the `manifest.json` catalog
+(vexspoke downloads → `bin/new` → `MANIFEST_UPDATE` → `MANIFEST_PROMOTE`),
+never a JSON seed sitting next to the source.
 
-## 7. Cold boundary
+## 8. Cold boundary
 
 This is a cold boundary per the Cold-Strict, Hot-Minimal Validation Law:
-`MANIFEST` / `REFLECT` / `UPDATE` / `PROMOTE` validate exhaustively
-(null, bounds, mount state, mkdir/rename failures) and return `false` with
-zero partial state; the hot `Hot_poll` path stays minimal. No function in
-this unit blocks unboundedly or allocates outside stack buffers.
+`MANIFEST` / `LIBRARY` / `ENSURE` / `REFLECT` / `UPDATE` / `PROMOTE` validate
+exhaustively (null, bounds, mount state, declared-section match, mkdir/rename
+failures) and return `false` with zero partial state; the hot `Hot_poll` path
+stays minimal. No function in this unit blocks unboundedly or allocates
+outside stack buffers.

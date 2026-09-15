@@ -14,7 +14,7 @@ In conventional game architectures, window management and simulation loops are t
 
 * **OS Window Decoupling**: Thread 0 hosts the native platform window (`AppKit` / Cocoa on macOS; X11/Wayland on Linux). The display link, event pump, and surface layer persist indefinitely across module reloads.
 * **Decoupled Window Backend**: A window is a dumb surface + callback bridge (`window/window_cocoa.m`) — pure AppKit, zero Vulkan/Metal. It answers `Window_*` calls from graphvex and R5 apps through the per-window `WindowEvent` lifecycle registry; the GPU-era composite/attach surface is retained as `;;INTENTION` stubs until the darling compositor migrates onto the bridge (the Window Decoupling Law).
-* **Microsecond Dynamic Reloader**: Monitors filesystem timestamps (`hot/hot.c`) to detect newly built dynamic libraries (`.dylib`), swap function pointer dispatch tables, and rebind entry points with zero frame interruption. The install-ladder authority (`hot/manifest.h/.c`) gates what lands in the watch dir via the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs — the loader trusts the ladder placement. Vulkan module loading lives in graphvex (`src/vulkan/vk_loader.c`) — hotcwap holds no Vulkan code.
+* **Microsecond Dynamic Reloader**: Monitors filesystem timestamps (`hot/hot.c`) to detect newly built dynamic libraries (`.dylib`), swap function pointer dispatch tables, and rebind entry points with zero frame interruption. The install-ladder authority + `manifest.json` catalog (`hot/manifest.h/.c`) gates what lands in the watch dir via the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs — the loader trusts the ladder placement. Vulkan module loading lives in graphvex (`src/vulkan/vk_loader.c`) — hotcwap holds no Vulkan code.
 * **Low-Latency Event Pump**: Decoupled polling for keyboard, mouse, and touch in bounded 25ms slices (the Bounded Wait Law), mirrored into the vexspoke input rings per-window.
 
 ---
@@ -92,7 +92,7 @@ target_link_libraries(my_app PRIVATE hotcwap)
 * **`window/window_cocoa.m`** — Native macOS AppKit backend (pure AppKit, zero Vulkan/Metal): window lifecycle, event pump, chrome, traffic-light API, per-window `WindowEvent` registry.
 * **`window/window_linux.c`** — Linux X11/Wayland display backend.
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
-* **`hot/manifest.h/.c`** — The `MANIFEST(...)` install-layout authority (the "manifest binary way"): resolves `<application-data>/vexgraph/<app>` once, on first run reflects shipped payloads into `bin/current`, and the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs finalize staged `bin/new` sets into `current` — the MODE-2 cold-swap ladder beneath the MODE-1 `Hot_poll` hot swap. See `docs/install.md`.
+* **`hot/manifest.h/.c`** — The `MANIFEST(...)` install-layout authority (the "manifest binary way"): the install tree plus the `manifest.json` library catalog the downloader edits. `MANIFEST(kind, org, app)` resolves `<application-data>/<org>/<app>` once; `MANIFEST_LIBRARY(...)` registers library KEYS; `MANIFEST_UPDATE(library, payloadDir)` fail-closes undeclared payload sections and stages `bin/new/<library>`; `MANIFEST_PROMOTE()` slides each library's generations — the MODE-2 cold-swap ladder beneath the MODE-1 `Hot_poll` hot swap. See `docs/install.md`.
 * **`main/test_suite.c`** (umbrella root) & **`_tests/hotcwap/`** — Verification harnesses: `spoke_test`, `window_event_test`, `window_test` for spoke bridging, event dispatch, window creation, and dynamic library swapping.
 
 ---
