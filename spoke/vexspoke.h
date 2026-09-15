@@ -37,9 +37,11 @@
 // no vexspoke registry row today, so only the mechanism is real for now;
 // P0 mints the row and the manifest comparison upgrades the authority.
 //
-// First consumer row (lives in hotcwap/MANIFEST.mf — the seed the loader
-// reads; P0 generates it from the vexspoke build with ABI rows filled.
-// Documented here so table and policy can never drift apart):
+// First consumer row (the baseline the loader's allow-list admits; the
+// policy seed MANIFEST.mf is retired — the authority is now the on-disk
+// install ladder resolved by hot/manifest_path.h and documented in
+// _docs/install.md. Documented here so table and policy can never drift
+// apart):
 //   {"name":"hotcwap","runtime":"R1","sections":["arena","rings"]}
 
 #define VEXSPOKE_SECTION_ARENA "arena"

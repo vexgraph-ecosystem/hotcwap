@@ -93,7 +93,7 @@ target_link_libraries(my_app PRIVATE hotcwap)
 * **`window/window_linux.c`** — Linux X11/Wayland display backend.
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — Dynamic file manifest tracker and change detector.
-* **`MANIFEST.mf`** — Provider allow-list seed (HotManifest JSON): which vexspoke-based projects may bind, with granted sections. Add a consumer row here to admit a new project; no code swap. Not Java — see `spoke/MANIFEST.md`.
+* **`hot/manifest_path.h/.c`** — The `MANIFEST(...)` install-layout authority (the "manifest binary way"): resolves `<application-data>/vexgraph/<app>` once, on first run reflects shipped payloads into `bin/current`, and the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs finalize staged `bin/new` sets into `current` — the MODE-2 cold-swap ladder beneath the MODE-1 `Hot_poll` hot swap. See `_docs/install.md`.
 * **`main/test_suite.c`** (umbrella root) & **`_tests/hotcwap/`** — Verification harnesses: `manifest_test`, `spoke_test`, `window_event_test`, `window_test` for manifest parsing, spoke bridging, event dispatch, window creation, and dynamic library swapping.
 
 ---

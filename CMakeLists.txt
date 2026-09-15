@@ -38,6 +38,7 @@ add_library(hotcwap STATIC
     hot/hot_trampoline.c
     hot/hot_retire.c
     hot/manifest.c
+    hot/manifest_path.c
     hot/stage.c
     window/window_event.c
 )
