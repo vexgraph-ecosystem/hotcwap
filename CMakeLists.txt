@@ -33,38 +33,16 @@ add_library(hotcwap STATIC
     process/process.c
     process/console.c
     kernel/kernel.c
+    spoke/vexspoke.c
     hot/hot.c
     hot/hot_trampoline.c
     hot/hot_retire.c
     hot/manifest.c
-    hot/vk_loader.c
-    hot/spv_watch.c
     hot/stage.c
     window/window_event.c
 )
 target_include_directories(hotcwap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(hotcwap PRIVATE -Wall -Wextra -Werror)
-
-# Vulkan headers: prefer find_package, fall back to brew --prefix
-find_package(Vulkan QUIET)
-if(NOT Vulkan_FOUND AND APPLE)
-    execute_process(COMMAND brew --prefix OUTPUT_VARIABLE BREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(BREW_PREFIX AND EXISTS "${BREW_PREFIX}/include/vulkan/vulkan.h")
-        set(Vulkan_INCLUDE_DIRS "${BREW_PREFIX}/include")
-        set(Vulkan_FOUND TRUE)
-    endif()
-endif()
-if(Vulkan_FOUND)
-    target_include_directories(hotcwap PUBLIC ${Vulkan_INCLUDE_DIRS})
-endif()
-
-# Dynamic module sample: compiled into runtime dylib
-add_library(vk_module MODULE hot/vk_module.c)
-target_include_directories(vk_module PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(vk_module PRIVATE -Wall -Wextra -Werror)
-if(Vulkan_FOUND)
-    target_include_directories(vk_module PUBLIC ${Vulkan_INCLUDE_DIRS})
-endif()
 
 # Phase-1 L2 behavior subject: pure pulse/bar math + texture path.
 # Host handlers delegate here; module holds no GPU/Panel state so swap is
@@ -160,6 +138,19 @@ if(NOT TARGET manifest_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_test.c")
     )
     target_include_directories(manifest_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(manifest_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
+# Headless spoke bridge test: static fill wires every slot, arena lifecycle
+# through the opaque table with type attestation. Needs the real vexspoke
+# symbols, so it builds only where the vexspoke target exists.
+if(NOT TARGET spoke_test AND EXISTS "${HOTCWAP_TEST_DIR}/spoke_test.c" AND TARGET vexspoke)
+    add_executable(spoke_test
+        spoke/vexspoke.c
+        ${HOTCWAP_TEST_DIR}/spoke_test.c
+    )
+    target_include_directories(spoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(spoke_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(spoke_test PRIVATE vexspoke)
 endif()
 
 if(NOT TARGET window_test AND EXISTS "${HOTCWAP_TEST_DIR}/window_test.c")

@@ -14,8 +14,7 @@ In conventional game architectures, window management and simulation loops are t
 
 * **OS Window Decoupling**: Thread 0 hosts the native platform window (`AppKit` / Cocoa on macOS; X11/Wayland on Linux). The display link, event pump, and surface layer persist indefinitely across module reloads.
 * **Decoupled Window Backend**: A window is a dumb surface + callback bridge (`window/window_cocoa.m`) — pure AppKit, zero Vulkan/Metal. It answers `Window_*` calls from graphvex and R5 apps through the per-window `WindowEvent` lifecycle registry; the GPU-era composite/attach surface is retained as `;;INTENTION` stubs until the darling compositor migrates onto the bridge (the Window Decoupling Law).
-* **Microsecond Dynamic Reloader**: Monitors file manifests and filesystem timestamps (`hot/manifest.c`, `hot/hot.c`) to detect newly built dynamic libraries (`.dylib`), swap function pointer dispatch tables, and rebind entry points with zero frame interruption.
-* **Vulkan GPA Loader**: Integrated `vkGetInstanceProcAddr` dynamic loader (`hot/vk_loader.c`) that extracts Vulkan symbols dynamically without requiring hard linkage to external loader stubs.
+* **Microsecond Dynamic Reloader**: Monitors file manifests and filesystem timestamps (`hot/manifest.c`, `hot/hot.c`) to detect newly built dynamic libraries (`.dylib`), swap function pointer dispatch tables, and rebind entry points with zero frame interruption. Vulkan module loading lives in graphvex (`src/vulkan/vk_loader.c`) — hotcwap holds no Vulkan code.
 * **Low-Latency Event Pump**: Decoupled polling for keyboard, mouse, and touch in bounded 25ms slices (the Bounded Wait Law), mirrored into the vexspoke input rings per-window.
 
 ---
@@ -61,7 +60,7 @@ When integrated inside an umbrella workspace:
 # In your top-level CMakeLists.txt
 add_subdirectory(projects/hotcwap)
 
-add_executable(my_app main.c)
+add_executable(my_app spoke.c)
 target_link_libraries(my_app PRIVATE hotcwap vexspoke)
 ```
 
@@ -69,15 +68,15 @@ target_link_libraries(my_app PRIVATE hotcwap vexspoke)
 When building standalone or in downstream projects:
 
 ```cmake
-if(NOT TARGET hotcwap)
+if (NOT TARGET hotcwap)
     include(FetchContent)
     FetchContent_Declare(
-        hotcwap
-        GIT_REPOSITORY https://github.com/vexgraph-dev/hotcwap.git
-        GIT_TAG main
+            hotcwap
+            GIT_REPOSITORY https://github.com/vexgraph-dev/hotcwap.git
+            GIT_TAG spoke
     )
     FetchContent_MakeAvailable(hotcwap)
-endif()
+endif ()
 
 target_link_libraries(my_app PRIVATE hotcwap)
 ```
@@ -88,13 +87,13 @@ target_link_libraries(my_app PRIVATE hotcwap)
 
 * **`kernel/kernel.h/.c`** — R0 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
 * **`process/`** — Process taxonomy: `process` (one-shot invocable), `application` (executable identity + window registry + hot-module slot), `console` (tty/session pump).
+* **`spoke/vexspoke.h/.c`** — R1→R2 bridge contract: the `VexspokeApi` fn-table (arena + input rings, opaque handles, type-attested). The single seam including vexspoke headers — `kernel/` names no vexspoke type.
 * **`window/window.h/.c`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
 * **`window/window_cocoa.m`** — Native macOS AppKit backend (pure AppKit, zero Vulkan/Metal): window lifecycle, event pump, chrome, traffic-light API, per-window `WindowEvent` registry.
 * **`window/window_linux.c`** — Linux X11/Wayland display backend.
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — Dynamic file manifest tracker and change detector.
-* **`hot/vk_loader.c`** — Dynamic MoltenVK/Vulkan symbol loader and GPA function table generator.
-* **`hot/vk_module.c`** — Hot-reloadable Vulkan pipeline module bindings.
+* **`MANIFEST.mf`** — Provider allow-list seed (HotManifest JSON): which vexspoke-based projects may bind, with granted sections. Add a consumer row here to admit a new project; no code swap. Not Java — see `spoke/MANIFEST.md`.
 * **`main/vk_test.c`** & **`tests/window_test.c`** — Verification test harnesses for Cocoa window creation, event polling, and dynamic library swapping.
 
 ---
@@ -102,6 +101,5 @@ target_link_libraries(my_app PRIVATE hotcwap)
 ## Requirements
 
 * C23 compiler (Clang with `-std=gnu23`).
-* macOS (AppKit, Cocoa, QuartzCore, Metal) or Linux (X11).
+* macOS (AppKit, Cocoa) or Linux (X11).
 * CMake $\ge$ 4.3.
-* Vulkan SDK / MoltenVK headers.
