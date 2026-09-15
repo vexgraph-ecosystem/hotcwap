@@ -29,7 +29,8 @@
 // consumers[] with the sections it needs, then (2) filling this table — from
 // static symbols (strangler phase, VexspokeApi_fillStatic) or dlopen
 // (refresh phase). Unlisted consumers never reach step 2:
-// HotManifest_allows refuses first.
+// the install-ladder authority (hot/manifest.h MANIFEST_UPDATE gate)
+// refuses first.
 //
 // Handle attestation: createArena reports the provider-minted type id
 // alongside the handle; holders store both and require nonzero (fail-closed
@@ -39,8 +40,8 @@
 //
 // First consumer row (the baseline the loader's allow-list admits; the
 // policy seed MANIFEST.mf is retired — the authority is now the on-disk
-// install ladder resolved by hot/manifest_path.h and documented in
-// _docs/install.md. Documented here so table and policy can never drift
+// install ladder resolved by hot/manifest.h and documented in
+// docs/install.md. Documented here so table and policy can never drift
 // apart):
 //   {"name":"hotcwap","runtime":"R1","sections":["arena","rings"]}
 

@@ -1,6 +1,6 @@
 # The MANIFEST(...) Install Layout — hotcwap's "Manifest Binary Way"
 
-`hot/manifest_path.h/.c` is the per-app **install-layout authority**. The
+`hot/manifest.h/.c` is the per-app **install-layout authority**. The
 manifest is the on-disk install tree itself — there is no separate policy
 file to keep in sync. `MANIFEST.mf` (the old JSON seed) is retired.
 
@@ -21,11 +21,11 @@ Every install resolves from one OS root via `ManifestPath_begin`:
 | `MANIFEST_APP_DATA` | `~/Library/Application Support` | `%LOCALAPPDATA%` | `~/.local/share` (or `$XDG_DATA_HOME`) |
 
 The platform-agnostic base is `#define APPLICATION_PATH`, one `_WIN32` /
-`__APPLE__` / else branch in `hot/manifest_path.h`. Building with a custom
+`__APPLE__` / else branch in `hot/manifest.h`. Building with a custom
 deployment? Override the macro at build time. Testing? Any tool that wants
 an isolated tree sets **`$VEX_MANIFEST`** to a scratch base — the resolver
 honors it first, so a test may mount a ladder in `/tmp` with zero install
-risk (this is the seam `manifest_path` smoke tests use).
+risk (this is the seam the manifest smoke tests use).
 
 ## 2. `MANIFEST(...)` — one-time init
 
@@ -85,16 +85,19 @@ it returns `false` and the launcher retries next launch.)
 
 ## 5. Two update experiences (the "hot c wap")
 
-Both modes share the ladder and the same verification primitive
-(`HotStage_verify`: `hot.manifest` schema + `files.sha` FNV-1a integrity).
+Both modes share the ladder and the same `MANIFEST_UPDATE()` gate: the
+staged set in `bin/new` must have content before any promotion is allowed.
+The older `HotStage_verify` (JSON `hot.manifest` schema + `files.sha`
+FNV-1a) is retired — vexspoke validates content before placing payloads
+into `bin/new`; the verb checks the ladder state.
 
 ### MODE 1 — HOT SWAP (app running)
 
-Updates land in `bin/new`, `MANIFEST_UPDATE()` verifies the staged set,
-then the existing `hot/hot.c` pipeline hot-loads it **in-place** —
-`clone → dlopen → ABI gate → save state → trampoline swap → init new →
-restore state → shutdown old → retire ring (4-poll grace)`. Zero restart,
-`current/` stays pinned during the swap.
+Beyond the ladder, MODE 1 is `hot/hot.c`'s in-place pipeline:
+`clone → dlopen → trampoline swap → retire ring (4-poll grace)`. Modules
+expose exports via the struct contract (`VkModuleGetTrampolines`); the
+retired JSON `Hot_manifest` ABI gate is gone — the ladder placement is the
+gate. Zero restart, `current/` stays pinned during the swap.
 
 ### MODE 2 — COLD SWAP (app closed)
 
@@ -125,8 +128,9 @@ bool ok = MANIFEST_PROMOTE();  // slide the ladder:
 `MANIFEST.mf` (repo root) and `spoke/MANIFEST.md` are retired. The
 `consumers[]` allow-list that governed which projects may bind vexspoke now
 reads as a **documented baseline** in `spoke/vexspoke.h` — the authority for
-what may board is the on-disk install ladder plus the `HotManifest` ABI gate,
-never a JSON seed sitting next to the source.
+what may board is the on-disk install ladder alone (vexspoke downloads →
+`bin/new` → `MANIFEST_UPDATE` → `MANIFEST_PROMOTE`), never a JSON seed
+sitting next to the source.
 
 ## 7. Cold boundary
 

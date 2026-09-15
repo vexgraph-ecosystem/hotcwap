@@ -11,7 +11,7 @@
  * MODULE: BridgeSeamTest (tests/bridge_seam_test.c)
  * LEVEL: L3 — Module Code (headless verification harness, Apple-only)
  * ============================================================================
- * Pins the bridging doctrine (_docs/bridging.md §3): the pixel seam is
+ * Pins the bridging doctrine (docs/bridging.md §3): the pixel seam is
  * inert BY DESIGN — a pure AppKit window owns no raster target, no layer,
  * no present worker. Every inert function is null-safe and degrades to its
  * documented default, so consumers compile against one stable header and

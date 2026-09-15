@@ -38,8 +38,6 @@ add_library(hotcwap STATIC
     hot/hot_trampoline.c
     hot/hot_retire.c
     hot/manifest.c
-    hot/manifest_path.c
-    hot/stage.c
     window/window_event.c
 )
 target_include_directories(hotcwap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -129,17 +127,6 @@ if(NOT EXISTS "${HOTCWAP_TEST_DIR}")
     set(HOTCWAP_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 endif()
 
-# Manifest artifact: headless suite for the module manifest contract
-# (order-tolerant parse, fail-closed swap compatibility, digest).
-# Self-contained (hot/manifest.c only) so it builds standalone and in-tree.
-if(NOT TARGET manifest_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_test.c")
-    add_executable(manifest_test
-        hot/manifest.c
-        ${HOTCWAP_TEST_DIR}/manifest_test.c
-    )
-    target_include_directories(manifest_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_options(manifest_test PRIVATE -Wall -Wextra -Werror)
-endif()
 
 # Headless spoke bridge test: static fill wires every slot, arena lifecycle
 # through the opaque table with type attestation. Needs the real vexspoke
@@ -175,7 +162,7 @@ if(NOT TARGET window_event_test AND EXISTS "${HOTCWAP_TEST_DIR}/window_event_tes
     target_link_libraries(window_event_test PRIVATE hotcwap)
 endif()
 
-# Inert pixel-seam contract test (_docs/bridging.md §3): pins the safe
+# Inert pixel-seam contract test (docs/bridging.md §3): pins the safe
 # defaults (false/nullptr/no-op) of every function hotcwap keeps inert by
 # design. In-repo (tests/) so it is tracked — unlike the umbrella _tests/
 # scratch dir. Links hotcwap for the per-OS backend; vexspoke input symbols

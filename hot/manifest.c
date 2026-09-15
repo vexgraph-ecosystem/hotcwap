@@ -1,500 +1,519 @@
 #include "hot/manifest.h"
 
-#include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
+
+#if defined(_WIN32)
+#  include <io.h>
+#  include <windows.h>
+#  define RENAME(a, b) (MoveFileExA((a), (b), MOVEFILE_REPLACE_EXISTING) != 0)
+#  define UNLINK(a)    _unlink(a)
+#else
+#  include <unistd.h>
+#  define RENAME(a, b) (rename((a), (b)) == 0)
+#  define UNLINK(a)    unlink(a)
+#endif
+
 #include "annotation/overview.h"
 
 ;;OVERVIEW
 /**
  * ============================================================================
- * MODULE: Manifest (hot/manifest.c)
- * LEVEL: L1 — File Metadata (manifest schema other files consume)
+ * CLASS: Manifest (hot/manifest.c)
+ * LEVEL: L4 — Self-Management (owns the per-app install layout on disk)
  * ============================================================================
-  * Module manifest format.
-  *
-  * STRUCT FIELDS: none — procedural/stateless (operates on HotManifest)
-  *
-  * FUNCTION REGISTRY:
+ * The MANIFEST(...) install-layout authority — the "manifest binary way".
+ * The manifest IS the on-disk install tree: MANIFEST(...) resolves
+ * <application-base>/<org>/<app> from the platform application-data base,
+ * creating directories as it goes, and the MANIFEST_* verbs walk the ladder.
+ * MANIFEST.mf (the JSON policy seed) is retired — no separate policy file.
+ *
+ * STRUCT FIELDS (Mirroring hot/manifest.h — exactly this file's class):
  * ----------------------------------------------------------------------------
+ *   char  *buf;    // caller-owned destination buffer
+ *   size_t cap;    // capacity of buf
+ *   size_t len;    // current path length, excluding the trailing NUL
+ *
+ * PRIVATE HELPERS (file-local pure-data only):
+ * ----------------------------------------------------------------------------
+ *   static char  g_root[MANIFEST_BUF_CAP];   // the locked install root
+ *   static bool  g_mounted;                  // MANIFEST() one-time guard
+ *   static bool  dir_exists(const char *path);
+ *   static bool  dir_mkdir(const char *path);        // mkdir one level
+ *   static bool  mkdir_p(const char *path);          // mkdir whole tree
+ *   static bool  resolve_base(char *out, size_t cap); // platform base path
+ *   static bool  copy_file(const char *src, const char *dst);
+ *   static bool  file_exists(const char *path);
+ *   static void  remove_ladder_dir(const char *dir); // recursive rm via rename+globe
+ *
+ * FUNCTION REGISTRY:
+ * ----------------------------------------------------------------------------
+ * Constructors:
+ *   - ManifestPath(dest, cap)            : ManifestPath_0(dest, cap)
+ *   - MANIFEST(app, ...)                 : one-shot init + mkdir ladder root
+ *
  * Core Functions:
- *   - HotManifest_parse(json, len, out)
- *   - HotManifest_compatible(old_manifest, new_manifest)
- *   - HotManifest_digest(manifest)
- *   - HotManifest_allows(manifest, consumer, section)
+ *   - MANIFEST_ROOT()
+ *   - MANIFEST_ENSURE()
+ *   - MANIFEST_REFLECT(sourceDir)
+ *   - MANIFEST_UPDATE()
+ *   - MANIFEST_PROMOTE()
+ *   - MANIFEST_IS_FIRST_RUN()
+ *
+ * Path Builders:
+ *   - ManifestPath_push(self, segment, create)
+ *   - ManifestPath_begin(self, kind)
+ *   - ManifestPath_ladderDir(slot, dest, cap, create)
+ *   - ManifestPath_hotDir(dest, cap)
+ *   - ManifestPath_cacheDir(dest, cap)
  *
  * Getters:
- *   - HotManifest_get_type_id(manifest, name)
+ *   - ManifestPath_get(const self)
+ *   - ManifestPath_len(const self)
  * ============================================================================
  */
 
+#define MANIFEST_BUF_CAP 1024
+#define MANIFEST_BIN "bin"
+#define MANIFEST_HOT "hot"
+#define MANIFEST_CACHE "cache"
+#define SLOT_NAMES { "backward", "previous", "current", "new" }
+#define ROTATION_DIR  ".promote_rot"
 
-// hot/manifest.c — Minimal JSON parser for module manifests.
-//
-// This is a deliberately simple parser — no external dependencies.
-// It handles the specific manifest format we need:
-//   {"name": "...", "version": "...", "type_ids": [...], "exports": [...], "dependencies": [...],
-//    "consumers": [{"name": "...", "runtime": "...", "sections": [...]}]}
-// Type rows carry {"name", "value"} plus optional "parent"/"size" in any order.
+static char g_root[MANIFEST_BUF_CAP];
+static bool g_mounted = false;
 
-// Skip whitespace
-static const char *skip_ws(const char *p) {
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    return p;
-}
+// --- private helpers ---------------------------------------------------------
 
-// Parse a JSON string with escape sequence handling (\", \\, \n, \t, \uXXXX)
-static const char *parse_string(const char *p, char *out, size_t out_size) {
-    if (*p != '"') return nullptr;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_size - 1) {
-        if (*p == '\\') {
-            p++;
-            if (!*p) break;
-            if (*p == '"') { out[i++] = '"'; p++; }
-            else if (*p == '\\') { out[i++] = '\\'; p++; }
-            else if (*p == '/') { out[i++] = '/'; p++; }
-            else if (*p == 'b') { out[i++] = '\b'; p++; }
-            else if (*p == 'f') { out[i++] = '\f'; p++; }
-            else if (*p == 'n') { out[i++] = '\n'; p++; }
-            else if (*p == 'r') { out[i++] = '\r'; p++; }
-            else if (*p == 't') { out[i++] = '\t'; p++; }
-            else if (*p == 'u') {
-                p++;
-                uint32_t u = 0;
-                for (int h = 0; h < 4 && *p; h++, p++) {
-                    u <<= 4;
-                    if (*p >= '0' && *p <= '9') u |= (uint32_t) (*p - '0');
-                    else if (*p >= 'a' && *p <= 'f') u |= (uint32_t) (*p - 'a' + 10);
-                    else if (*p >= 'A' && *p <= 'F') u |= (uint32_t) (*p - 'A' + 10);
-                }
-                if (u < 0x80) {
-                    out[i++] = (char) u;
-                } else if (u < 0x800 && i + 1 < out_size - 1) {
-                    out[i++] = (char) (0xC0 | (u >> 6));
-                    out[i++] = (char) (0x80 | (u & 0x3F));
-                } else if (i + 2 < out_size - 1) {
-                    out[i++] = (char) (0xE0 | (u >> 12));
-                    out[i++] = (char) (0x80 | ((u >> 6) & 0x3F));
-                    out[i++] = (char) (0x80 | (u & 0x3F));
-                }
-            } else {
-                out[i++] = *p++;
-            }
-        } else {
-            out[i++] = *p++;
-        }
-    }
-    out[i] = '\0';
-    if (*p == '"') p++;
-    return p;
-}
-
-// Parse a JSON number (uint64)
-static const char *parse_uint(const char *p, uint64_t *out) {
-    uint64_t val = 0;
-    while (*p >= '0' && *p <= '9') {
-        val = val * 10 + (*p - '0');
-        p++;
-    }
-    *out = val;
-    return p;
-}
-
-// Parse a hex number (0x...)
-static const char *parse_hex(const char *p, uint64_t *out) {
-    uint64_t val = 0;
-    while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F')) {
-        uint8_t nibble;
-        if (*p >= '0' && *p <= '9') nibble = *p - '0';
-        else if (*p >= 'a' && *p <= 'f') nibble = *p - 'a' + 10;
-        else nibble = *p - 'A' + 10;
-        val = (val << 4) | nibble;
-        p++;
-    }
-    *out = val;
-    return p;
-}
-
-// Parse a JSON object value after the key
-static const char *parse_value(const char *p, char *str_out, size_t str_size, uint64_t *num_out, bool *is_hex) {
-    p = skip_ws(p);
-    if (*p == '"') {
-        p = parse_string(p, str_out, str_size);
-        *is_hex = false;
-    } else if (p[0] == '0' && p[1] == 'x') {
-        p += 2;
-        p = parse_hex(p, num_out);
-        *is_hex = true;
-    } else {
-        p = parse_uint(p, num_out);
-        *is_hex = false;
-    }
-    return p;
-}
-
-bool HotManifest_parse(const char *json, size_t len, HotManifest *out) {
-    if (!json || !out) return false;
-    memset(out, 0, sizeof(*out));
-    
-    const char *p = json;
-    const char *end = json + len;
-    
-    // Expect opening brace
-    p = skip_ws(p);
-    if (*p != '{') return false;
-    p++;
-    
-    while (p < end) {
-        p = skip_ws(p);
-        if (*p == '}') break; // End of object
-        
-        // Parse key
-        char key[64];
-        p = parse_string(p, key, sizeof(key));
-        if (!p) return false;
-        
-        // Expect colon
-        p = skip_ws(p);
-        if (*p != ':') return false;
-        p++;
-        
-        // Parse value
-        p = skip_ws(p);
-        
-        if (strcmp(key, "name") == 0) {
-            char value[64];
-            bool is_hex;
-            p = parse_value(p, value, sizeof(value), nullptr, &is_hex);
-            strncpy((*out).name, value, HOT_MANIFEST_MAX_NAME - 1);
-        } else if (strcmp(key, "version") == 0) {
-            char value[64];
-            bool is_hex;
-            p = parse_value(p, value, sizeof(value), nullptr, &is_hex);
-            strncpy((*out).version, value, HOT_MANIFEST_MAX_VERSION - 1);
-        } else if (strcmp(key, "type_ids") == 0) {
-            // Expect array
-            if (*p != '[') return false;
-            p++;
-            while (p < end) {
-                p = skip_ws(p);
-                if (*p == ']') { p++; break; }
-                if (*p == ',') { p++; continue; }
-                
-                // Type row: {"name": "...", "value": 0x...} plus optional
-                // "parent" (class number) and "size" (struct bytes), in any
-                // order. Absent parent/size stay unstated (legacy wire form).
-                if (*p != '{') return false;
-                p++;
-
-                HotTypeId tid;
-                memset(&tid, 0, sizeof(tid));
-
-                while (p < end) {
-                    p = skip_ws(p);
-                    if (*p == '}') { p++; break; }
-                    if (*p == ',') { p++; continue; }
-                    char tkey[32];
-                    p = parse_string(p, tkey, sizeof(tkey));
-                    if (!p) return false;
-                    p = skip_ws(p);
-                    if (*p != ':') return false;
-                    p++;
-                    p = skip_ws(p);
-                    if (strcmp(tkey, "name") == 0) {
-                        char tname[64];
-                        bool is_hex = false;
-                        p = parse_value(p, tname, sizeof(tname), nullptr, &is_hex);
-                        if (!p) return false;
-                        strncpy(tid.name, tname, HOT_MANIFEST_MAX_NAME - 1);
-                    } else if (strcmp(tkey, "value") == 0) {
-                        uint64_t tval = 0;
-                        bool is_hex = false;
-                        p = parse_value(p, nullptr, 0, &tval, &is_hex);
-                        if (!p) return false;
-                        tid.value = tval;
-                    } else if (strcmp(tkey, "parent") == 0) {
-                        uint64_t tpar = 0;
-                        bool is_hex = false;
-                        p = parse_value(p, nullptr, 0, &tpar, &is_hex);
-                        if (!p) return false;
-                        tid.parent = (int32_t) tpar;
-                        tid.has_parent = true;
-                    } else if (strcmp(tkey, "size") == 0) {
-                        uint64_t tsize = 0;
-                        bool is_hex = false;
-                        p = parse_value(p, nullptr, 0, &tsize, &is_hex);
-                        if (!p) return false;
-                        tid.size = (uint32_t) tsize;
-                    } else {
-                        // Unknown key — skip value
-                        if (*p == '"') {
-                            char dummy[64];
-                            bool is_hex = false;
-                            p = parse_value(p, dummy, sizeof(dummy), nullptr, &is_hex);
-                        } else {
-                            uint64_t dummy = 0;
-                            bool is_hex = false;
-                            p = parse_value(p, nullptr, 0, &dummy, &is_hex);
-                        }
-                        if (!p) return false;
-                    }
-                }
-
-                if ((*out).type_id_count < HOT_MANIFEST_MAX_TYPE_IDS) {
-                    (*out).type_ids[(*out).type_id_count++] = tid;
-                }
-            }
-        } else if (strcmp(key, "exports") == 0) {
-            if (*p != '[') return false;
-            p++;
-            while (p < end) {
-                p = skip_ws(p);
-                if (*p == ']') { p++; break; }
-                if (*p == ',') { p++; continue; }
-                
-                char value[64];
-                bool is_hex;
-                p = parse_value(p, value, sizeof(value), nullptr, &is_hex);
-                
-                if ((*out).export_count < HOT_MANIFEST_MAX_EXPORTS) {
-                    strncpy((*out).exports[(*out).export_count].name, value, HOT_MANIFEST_MAX_NAME - 1);
-                    (*out).export_count++;
-                }
-            }
-        } else if (strcmp(key, "dependencies") == 0) {
-            if (*p != '[') return false;
-            p++;
-            while (p < end) {
-                p = skip_ws(p);
-                if (*p == ']') { p++; break; }
-                if (*p == ',') { p++; continue; }
-                
-                char value[64];
-                bool is_hex;
-                p = parse_value(p, value, sizeof(value), nullptr, &is_hex);
-                
-                if ((*out).dependency_count < HOT_MANIFEST_MAX_DEPENDENCIES) {
-                    strncpy((*out).dependencies[(*out).dependency_count].name, value, HOT_MANIFEST_MAX_NAME - 1);
-                    (*out).dependency_count++;
-                }
-            }
-        } else if (strcmp(key, "consumers") == 0) {
-            // Allow-list rows: {"name": "...", "runtime": "...",
-            // "sections": ["..."]} in any order. Unknown row keys skip like
-            // type rows. Overflow rows drop (bounded, no alloc).
-            if (*p != '[') return false;
-            p++;
-            while (p < end) {
-                p = skip_ws(p);
-                if (*p == ']') { p++; break; }
-                if (*p == ',') { p++; continue; }
-                if (*p != '{') return false;
-                p++;
-
-                HotConsumer row;
-                memset(&row, 0, sizeof(row));
-
-                while (p < end) {
-                    p = skip_ws(p);
-                    if (*p == '}') { p++; break; }
-                    if (*p == ',') { p++; continue; }
-                    char ckey[32];
-                    p = parse_string(p, ckey, sizeof(ckey));
-                    if (!p) return false;
-                    p = skip_ws(p);
-                    if (*p != ':') return false;
-                    p++;
-                    p = skip_ws(p);
-                    if (strcmp(ckey, "name") == 0) {
-                        char cname[64];
-                        bool is_hex = false;
-                        p = parse_value(p, cname, sizeof(cname), nullptr, &is_hex);
-                        if (!p) return false;
-                        strncpy(row.name, cname, HOT_MANIFEST_MAX_NAME - 1);
-                    } else if (strcmp(ckey, "runtime") == 0) {
-                        char cruntime[64];
-                        bool is_hex = false;
-                        p = parse_value(p, cruntime, sizeof(cruntime), nullptr, &is_hex);
-                        if (!p) return false;
-                        strncpy(row.runtime, cruntime, HOT_MANIFEST_MAX_RUNTIME - 1);
-                    } else if (strcmp(ckey, "sections") == 0) {
-                        if (*p != '[') return false;
-                        p++;
-                        while (p < end) {
-                            p = skip_ws(p);
-                            if (*p == ']') { p++; break; }
-                            if (*p == ',') { p++; continue; }
-                            char sec[64];
-                            bool is_hex = false;
-                            p = parse_value(p, sec, sizeof(sec), nullptr, &is_hex);
-                            if (!p) return false;
-                            if (row.section_count < HOT_MANIFEST_MAX_CONSUMER_SECTIONS) {
-                                strncpy(row.sections[row.section_count], sec, HOT_MANIFEST_MAX_NAME - 1);
-                                row.section_count++;
-                            }
-                        }
-                    } else {
-                        if (*p == '"') {
-                            char dummy[64];
-                            bool is_hex = false;
-                            p = parse_value(p, dummy, sizeof(dummy), nullptr, &is_hex);
-                        } else if (*p == '[') {
-                            p++;
-                            int depth = 1;
-                            while (p < end && depth > 0) {
-                                if (*p == '[') depth++;
-                                else if (*p == ']') depth--;
-                                p++;
-                            }
-                        } else {
-                            uint64_t dummy = 0;
-                            bool is_hex = false;
-                            p = parse_value(p, nullptr, 0, &dummy, &is_hex);
-                        }
-                        if (!p) return false;
-                    }
-                }
-
-                if ((*out).consumer_count < HOT_MANIFEST_MAX_CONSUMERS) {
-                    (*out).consumers[(*out).consumer_count++] = row;
-                }
-            }
-        } else {
-            // Unknown key — skip value
-            if (*p == '"') {
-                char dummy[64];
-                bool is_hex;
-                p = parse_value(p, dummy, sizeof(dummy), nullptr, &is_hex);
-            } else {
-                uint64_t dummy;
-                bool is_hex;
-                p = parse_value(p, nullptr, 0, &dummy, &is_hex);
-            }
-        }
-        
-        // Expect comma or closing brace
-        p = skip_ws(p);
-        if (*p == ',') p++;
-        else if (*p == '}') break;
-    }
-    
-    return true;
-}
-
-static const HotTypeId *find_type_id(const HotManifest *manifest, const char *name) {
-    if (!manifest || !name)
-        return nullptr;
-    for (uint32_t i = 0; i < (*manifest).type_id_count; i++) {
-        if (strcmp((*manifest).type_ids[i].name, name) == 0)
-            return &(*manifest).type_ids[i];
-    }
-    return nullptr;
-}
-
-bool HotManifest_compatible(const HotManifest *old_manifest, const HotManifest *new_manifest) {
-    if (!old_manifest || !new_manifest) return false;
-
-    // Every old type name must exist in the new manifest with the same value.
-    // Parent chains and struct sizes must match wherever both sides state
-    // them; one-sided parent/size refuses (a side that withholds contract
-    // info cannot prove compatibility). New names in the new manifest are
-    // allowed (growth); removed or renumbered names refuse.
-    for (uint32_t i = 0; i < (*old_manifest).type_id_count; i++) {
-        const HotTypeId *o = &(*old_manifest).type_ids[i];
-        const HotTypeId *n = find_type_id(new_manifest, (*o).name);
-        if (!n)
-            return false;
-        if ((*n).value != (*o).value)
-            return false;
-        if ((*o).has_parent || (*n).has_parent) {
-            if (!((*o).has_parent && (*n).has_parent))
-                return false;
-            if ((*o).parent != (*n).parent)
-                return false;
-        }
-        bool oSize = (*o).size != 0;
-        bool nSize = (*n).size != 0;
-        if (oSize || nSize) {
-            if (!(oSize && nSize))
-                return false;
-            if ((*o).size != (*n).size)
-                return false;
-        }
-    }
-
-    return true;
-}
-
-// FNV-1a 64: offset basis 14695981039346656037, prime 1099511628211.
-static void digest_bytes(uint64_t *hash, const void *data, size_t len) {
-    const uint8_t *bytes = (const uint8_t*) data;
-    for (size_t i = 0; i < len; i++) {
-        *hash ^= (uint64_t) bytes[i];
-        *hash *= 1099511628211ULL;
-    }
-}
-
-uint64_t HotManifest_digest(const HotManifest *manifest) {
-    if (!manifest)
-        return 0;
-    // Canonical order: insertion sort of row indices by name (n <= 256, so
-    // the quadratic sort is trivial). The digest must not depend on JSON
-    // key order — same contract, any order, same digest.
-    uint32_t order[HOT_MANIFEST_MAX_TYPE_IDS];
-    uint32_t n = (*manifest).type_id_count;
-    if (n > HOT_MANIFEST_MAX_TYPE_IDS)
-        n = HOT_MANIFEST_MAX_TYPE_IDS;
-    for (uint32_t i = 0; i < n; i++)
-        order[i] = i;
-    for (uint32_t i = 1; i < n; i++) {
-        uint32_t key = order[i];
-        uint32_t j = i;
-        while (j > 0 && strcmp((*manifest).type_ids[order[j - 1]].name, (*manifest).type_ids[key].name) > 0) {
-            order[j] = order[j - 1];
-            j--;
-        }
-        order[j] = key;
-    }
-    uint64_t hash = 14695981039346656037ULL;
-    for (uint32_t i = 0; i < n; i++) {
-        const HotTypeId *t = &(*manifest).type_ids[order[i]];
-        digest_bytes(&hash, (*t).name, strlen((*t).name) + 1);
-        digest_bytes(&hash, &(*t).value, sizeof((*t).value));
-        uint8_t stated = (*t).has_parent ? 1u : 0u;
-        digest_bytes(&hash, &stated, sizeof(stated));
-        digest_bytes(&hash, &(*t).parent, sizeof((*t).parent));
-        digest_bytes(&hash, &(*t).size, sizeof((*t).size));
-    }
-    return hash;
-}
-
-uint64_t HotManifest_get_type_id(const HotManifest *manifest, const char *name) {
-    if (!manifest || !name) return 0;
-    
-    for (uint32_t i = 0; i < (*manifest).type_id_count; i++) {
-        if (strcmp((*manifest).type_ids[i].name, name) == 0) {
-            return (*manifest).type_ids[i].value;
-        }
-    }
-    
-    return 0;
-}
-
-bool HotManifest_allows(const HotManifest *manifest, const char *consumer, const char *section) {
-    if (!manifest || !consumer)
+static bool dir_exists(const char *path) {
+    if (path == nullptr || *path == '\0')
         return false;
-    for (uint32_t i = 0; i < (*manifest).consumer_count; i++) {
-        const HotConsumer *row = &(*manifest).consumers[i];
-        if (strcmp((*row).name, consumer) != 0)
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    return stat(path, &st) == 0 && S_ISDIR((unsigned int) st.st_mode);
+}
+
+static bool file_exists(const char *path) {
+    if (path == nullptr || *path == '\0')
+        return false;
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    return stat(path, &st) == 0 && S_ISREG((unsigned int) st.st_mode);
+}
+
+static bool dir_mkdir(const char *path) {
+    if (dir_exists(path))
+        return true;
+#if defined(_WIN32)
+    int rc = _mkdir(path);
+#else
+    int rc = mkdir(path, 0755);
+#endif
+    if (rc != 0 && errno != EEXIST)
+        return false;
+    return dir_exists(path);
+}
+
+// mkdir -p: walk each '/' prefix and create it in order.
+static bool mkdir_p(const char *path) {
+    if (path == nullptr || *path == '\0')
+        return false;
+    char tmp[MANIFEST_BUF_CAP];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    while (len > 0 && (tmp[len - 1] == '/' || tmp[len - 1] == '\\'))
+        tmp[--len] = '\0';
+    size_t i = 1;
+    for (; tmp[i] != '\0'; i++) {
+        if (tmp[i] == '/' || tmp[i] == '\\') {
+            tmp[i] = '\0';
+            if (!dir_mkdir(tmp))
+                return false;
+            tmp[i] = '/';
+        }
+    }
+    return dir_mkdir(tmp);
+}
+
+// Recursive rm — rename-based: rename dir to a hidden sibling then sweep
+// everything under it. No system(), bounded per-entry unlinks.
+static void remove_ladder_dir(const char *dir) {
+    if (!dir_exists(dir))
+        return;
+    char tomb[MANIFEST_BUF_CAP];
+    snprintf(tomb, sizeof(tomb), "%s" ROTATION_DIR, dir);
+    RENAME(dir, tomb);
+    if (!dir_exists(tomb))
+        return;
+    DIR *d = opendir(tomb);
+    if (!d)
+        return;
+    struct dirent *ent;
+    char entry[MANIFEST_BUF_CAP];
+    while ((ent = readdir(d)) != nullptr) {
+        const char *name = (*ent).d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
             continue;
-        if (section == nullptr)
-            return true;
-        for (uint32_t s = 0; s < (*row).section_count; s++) {
-            if (strcmp((*row).sections[s], section) == 0)
-                return true;
-        }
+        snprintf(entry, sizeof(entry), "%s/%s", tomb, name);
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        if (lstat(entry, &st) == 0 && S_ISDIR((unsigned int) st.st_mode))
+            remove_ladder_dir(entry);
+        else
+            UNLINK(entry);
+    }
+    closedir(d);
+    rmdir(tomb);
+}
+
+static bool resolve_base(char *out, size_t cap) {
+    // $VEX_MANIFEST overrides the whole base (test seam).
+    const char *override = getenv("VEX_MANIFEST");
+    if (override && *override != '\0') {
+        snprintf(out, cap, "%s", override);
+        return true;
+    }
+    const char *home = getenv("HOME");
+    if (!home || *home == '\0')
+        home = ".";
+#if defined(_WIN32)
+    const char *local = getenv("LOCALAPPDATA");
+    if (local && *local != '\0')
+        snprintf(out, cap, "%s", local);
+    else {
+        const char *profile = getenv("USERPROFILE");
+        snprintf(out, cap, "%s", (profile && *profile != '\0') ? profile : home);
+    }
+#elif defined(__APPLE__)
+    snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
+#else
+    const char *xdg = getenv("XDG_DATA_HOME");
+    if (xdg && *xdg != '\0')
+        snprintf(out, cap, "%s", xdg);
+    else
+        snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
+#endif
+    return true;
+}
+
+static bool copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in)
+        return false;
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
         return false;
     }
-    return false;
+    uint8_t buf[4096];
+    size_t n = 0;
+    bool ok = true;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    fclose(in);
+    fclose(out);
+    return ok;
+}
+
+// --- constructors ------------------------------------------------------------
+
+ManifestPath ManifestPath_0(char *dest, size_t cap) {
+    ManifestPath self;
+    self.buf = dest;
+    self.cap = cap;
+    self.len = 0;
+    if (dest && cap > 0)
+        (*dest) = '\0';
+    return self;
+}
+
+bool MANIFEST(const char *first, ...) {
+    if (first == nullptr)
+        return false;
+    if (g_mounted)
+        return false;
+
+    char base[MANIFEST_BUF_CAP];
+    if (!resolve_base(base, sizeof(base)))
+        return false;
+
+    ManifestPath path = ManifestPath_0(g_root, sizeof(g_root));
+    if (!ManifestPath_begin(&path, MANIFEST_APP_DATA))
+        return false;
+    if (!ManifestPath_push(&path, MANIFEST_ORG, true))
+        return false;
+
+    const char *segment = first;
+    va_list ap;
+    va_start(ap, first);
+    while (segment != nullptr) {
+        if (*segment != '\0' && !ManifestPath_push(&path, segment, true))
+            break;
+        segment = va_arg(ap, const char*);
+    }
+    va_end(ap);
+    if (segment != nullptr) {
+        g_root[0] = '\0';
+        g_mounted = false;
+        return false;
+    }
+
+    g_mounted = true;
+    return true;
+}
+
+// --- core functions ----------------------------------------------------------
+
+const char *MANIFEST_ROOT(void) {
+    return g_mounted ? g_root : nullptr;
+}
+
+bool MANIFEST_ENSURE(void) {
+    if (!g_mounted)
+        return false;
+    char path[MANIFEST_BUF_CAP];
+    static const char *slots[] = SLOT_NAMES;
+    for (size_t i = 0; i < sizeof(slots) / sizeof(slots[0]); i++) {
+        if (!ManifestPath_ladderDir((ManifestLadder) i, path, sizeof(path), true))
+            return false;
+    }
+    if (!ManifestPath_hotDir(path, sizeof(path)))
+        return false;
+    if (!dir_mkdir(path))
+        return false;
+    if (!ManifestPath_cacheDir(path, sizeof(path)))
+        return false;
+    return dir_mkdir(path);
+}
+
+bool MANIFEST_REFLECT(const char *sourceDir) {
+    if (!g_mounted || sourceDir == nullptr)
+        return false;
+
+    char dest_dir[MANIFEST_BUF_CAP];
+    if (!ManifestPath_ladderDir(MANIFEST_LADDER_CURRENT, dest_dir, sizeof(dest_dir), true))
+        return false;
+
+    DIR *dir = opendir(sourceDir);
+    if (!dir)
+        return false;
+    struct dirent *ent;
+    bool ok = true;
+    while ((ent = readdir(dir)) != nullptr) {
+        const char *name = (*ent).d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        char src[MANIFEST_BUF_CAP];
+        char tmp[MANIFEST_BUF_CAP];
+        char dst[MANIFEST_BUF_CAP];
+        snprintf(src, sizeof(src), "%s/%s", sourceDir, name);
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        if (stat(src, &st) != 0 || !S_ISREG((unsigned int) st.st_mode))
+            continue;
+        snprintf(tmp, sizeof(tmp), "%s/.%s.reflect", dest_dir, name);
+        snprintf(dst, sizeof(dst), "%s/%s", dest_dir, name);
+        if (!copy_file(src, tmp)) {
+            ok = false;
+            break;
+        }
+        if (!RENAME(tmp, dst)) {
+            UNLINK(tmp);
+            ok = false;
+            break;
+        }
+    }
+    closedir(dir);
+    if (!ok)
+        return false;
+
+    char mark[MANIFEST_BUF_CAP];
+    snprintf(mark, sizeof(mark), "%s/%s", dest_dir, MANIFEST_MARK);
+    FILE *f = fopen(mark, "wb");
+    if (!f)
+        return false;
+    fputs("vexgraph install reflection\n", f);
+    fclose(f);
+    return true;
+}
+
+bool MANIFEST_UPDATE(void) {
+    if (!g_mounted)
+        return false;
+    char new_dir[MANIFEST_BUF_CAP];
+    if (!ManifestPath_ladderDir(MANIFEST_LADDER_NEW, new_dir, sizeof(new_dir), false))
+        return false;
+    // bin/new must exist and contain at least one regular file — Vexspoke
+    // validates content before placing; we check the ladder state only.
+    DIR *dir = opendir(new_dir);
+    if (!dir)
+        return false;
+    struct dirent *ent;
+    bool has_content = false;
+    while ((ent = readdir(dir)) != nullptr) {
+        const char *name = (*ent).d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        char entry[MANIFEST_BUF_CAP];
+        snprintf(entry, sizeof(entry), "%s/%s", new_dir, name);
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        if (stat(entry, &st) == 0 && S_ISREG((unsigned int) st.st_mode)) {
+            has_content = true;
+            break;
+        }
+    }
+    closedir(dir);
+    return has_content;
+}
+
+bool MANIFEST_PROMOTE(void) {
+    if (!g_mounted)
+        return false;
+
+    char backward[MANIFEST_BUF_CAP];
+    char previous[MANIFEST_BUF_CAP];
+    char current[MANIFEST_BUF_CAP];
+    char new_dir[MANIFEST_BUF_CAP];
+    if (!ManifestPath_ladderDir(MANIFEST_LADDER_BACKWARD, backward, sizeof(backward), false) ||
+        !ManifestPath_ladderDir(MANIFEST_LADDER_PREVIOUS, previous, sizeof(previous), false) ||
+        !ManifestPath_ladderDir(MANIFEST_LADDER_CURRENT, current, sizeof(current), false) ||
+        !ManifestPath_ladderDir(MANIFEST_LADDER_NEW, new_dir, sizeof(new_dir), false))
+        return false;
+
+    if (!dir_exists(new_dir))
+        return true; // nothing staged → idempotent no-op
+
+    // 1. drop the oldest rollback set.
+    remove_ladder_dir(backward);
+
+    // 2. slide: previous → backward, current → previous.
+    if (dir_exists(previous) && !RENAME(previous, backward))
+        return false;
+    if (dir_exists(current) && !RENAME(current, previous))
+        return false;
+
+    // 3. promote new → current.
+    if (!RENAME(new_dir, current))
+        return false;
+
+    return true;
+}
+
+bool MANIFEST_IS_FIRST_RUN(void) {
+    if (!g_mounted)
+        return true; // fail-closed: no mounted manifest means never installed
+    char current[MANIFEST_BUF_CAP];
+    char mark[MANIFEST_BUF_CAP];
+    if (!ManifestPath_ladderDir(MANIFEST_LADDER_CURRENT, current, sizeof(current), false))
+        return true;
+    snprintf(mark, sizeof(mark), "%s/%s", current, MANIFEST_MARK);
+    return !file_exists(mark);
+}
+
+// --- path builders -----------------------------------------------------------
+
+bool ManifestPath_begin(ManifestPath *self, ManifestRoot kind) {
+    if (self == nullptr || (*self).buf == nullptr || (*self).cap == 0)
+        return false;
+    char base[MANIFEST_BUF_CAP];
+    if (!resolve_base(base, sizeof(base)))
+        return false;
+    (void) kind; // all three roots resolve from the platform base today
+    snprintf((*self).buf, (*self).cap, "%s", base);
+    (*self).len = strlen((*self).buf);
+    return true;
+}
+
+bool ManifestPath_push(ManifestPath *self, const char *segment, bool create) {
+    if (self == nullptr || segment == nullptr || (*self).buf == nullptr)
+        return false;
+    size_t seg_len = strlen(segment);
+    size_t need = (*self).len + 1 + seg_len + 1;
+    if (need > (*self).cap)
+        return false;
+    (*self).buf[(*self).len] = '/';
+    memcpy((*self).buf + (*self).len + 1, segment, seg_len);
+    (*self).len += 1 + seg_len;
+    (*self).buf[(*self).len] = '\0';
+    if (create && !mkdir_p((*self).buf))
+        return false;
+    return true;
+}
+
+bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool create) {
+    if (dest == nullptr || cap == 0)
+        return false;
+    static const char *slot_names[] = SLOT_NAMES;
+    if (slot < MANIFEST_LADDER_BACKWARD || slot > MANIFEST_LADDER_NEW)
+        return false;
+    if (!g_mounted)
+        return false;
+    size_t root_len = strlen(g_root);
+    if (root_len + 1 + 3 + 1 + strlen(slot_names[slot]) + 1 > cap)
+        return false;
+    memcpy(dest, g_root, root_len);
+    dest[root_len] = '\0';
+    ManifestPath p;
+    p.buf = dest;
+    p.cap = cap;
+    p.len = root_len;
+    if (!ManifestPath_push(&p, MANIFEST_BIN, create))
+        return false;
+    if (!ManifestPath_push(&p, slot_names[slot], create))
+        return false;
+    return true;
+}
+
+bool ManifestPath_hotDir(char *dest, size_t cap) {
+    if (dest == nullptr || cap == 0)
+        return false;
+    if (!g_mounted)
+        return false;
+    size_t root_len = strlen(g_root);
+    if (root_len + 1 + strlen(MANIFEST_HOT) + 1 > cap)
+        return false;
+    memcpy(dest, g_root, root_len);
+    dest[root_len] = '\0';
+    ManifestPath p;
+    p.buf = dest;
+    p.cap = cap;
+    p.len = root_len;
+    return ManifestPath_push(&p, MANIFEST_HOT, false);
+}
+
+bool ManifestPath_cacheDir(char *dest, size_t cap) {
+    if (dest == nullptr || cap == 0)
+        return false;
+    if (!g_mounted)
+        return false;
+    size_t root_len = strlen(g_root);
+    if (root_len + 1 + strlen(MANIFEST_CACHE) + 1 > cap)
+        return false;
+    memcpy(dest, g_root, root_len);
+    dest[root_len] = '\0';
+    ManifestPath p;
+    p.buf = dest;
+    p.cap = cap;
+    p.len = root_len;
+    return ManifestPath_push(&p, MANIFEST_CACHE, false);
+}
+
+// --- getters -----------------------------------------------------------------
+
+const char *ManifestPath_get(const ManifestPath *self) {
+    return self == nullptr || (*self).buf == nullptr ? nullptr : (*self).buf;
+}
+
+size_t ManifestPath_len(const ManifestPath *self) {
+    return self == nullptr ? 0 : (*self).len;
 }

@@ -19,9 +19,11 @@
  * CLASS: HotModule (hot/hot.c)
  * LEVEL: L4 — Self-Management (watches, verifies, swaps, retires; fixes/upgrades itself)
  * ============================================================================
- * Hotloading system: watches hot_dir for .dylib/.so, verifies ABI via
- * HotManifest, atomically swaps trampoline pointers, retires old handles
- * after a grace period. Hot_poll() runs on main thread only.
+ * Hotloading system: watches hot_dir for .dylib/.so, swaps trampoline
+ * pointers atomically, retires old handles after a grace period. Hot_poll()
+ * loads clones, verifies exports are present, then swaps. The manifest
+ * authority (MANIFEST_UPDATE/PROMOTE) gates what lands in the watch dir —
+ * the loader trusts the ladder placement. Hot_poll() runs on main thread only.
  *
  * STRUCT FIELDS (Mirroring typedef struct HotModule — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -39,7 +41,6 @@
  *     char path[HOT_PATH_LEN];               // source dylib path
  *     void *handle;                          // dlopen handle (NULL = unloaded)
  *     uint64_t last_modified;                // mtime ns + size (change stamp)
- *     HotManifest manifest;                  // last verified manifest
  *     bool loaded;                           // true once first load succeeds
  *
  * Segregated (own files, see their overviews):
@@ -90,7 +91,6 @@ typedef struct {
     char path[HOT_PATH_LEN];
     void *handle;                    // dlopen handle
     uint64_t last_modified;          // last file modification timestamp (ns) + size
-    HotManifest manifest;            // current manifest
     bool loaded;                     // is currently loaded
 } HotModuleInternal;
 typedef struct HotModule {
@@ -157,22 +157,6 @@ static HotModuleInternal *find_module(HotModule *hot, const char *name) {
     return NULL;
 }
 
-// Phase-1: dependency gate. Every entry in new_manifest.dependencies must
-// already be loaded (except a self-reference). Scan order from readdir is
-// arbitrary, so a missing dep fails THIS poll and retries on the next one
-// once the dependency has loaded.
-static bool dependencies_met(HotModule *hot, const HotManifest *new_manifest, const char *self) {
-    for (uint32_t i = 0; i < (*new_manifest).dependency_count; i++) {
-        const char *dep = (*new_manifest).dependencies[i].name;
-        if (self && strcmp(dep, self) == 0)
-            continue;
-        HotModuleInternal *found = find_module(hot, dep);
-        if (!found || !(*found).loaded)
-            return false;
-    }
-    return true;
-}
-
 HotModule *Hot_init(const char *hot_dir) {
     if (!hot_dir) return NULL;
     
@@ -233,196 +217,35 @@ static HotResult load_module(HotModule *hot, HotModuleInternal *mod, const char 
         return HOT_ERROR_DLOPEN_FAILED;
     }
     
-    // 2. Get the manifest (try both naming conventions)
-    typedef const char *(*ManifestFn)(void);
-    ManifestFn get_manifest = (ManifestFn)dlsym(handle, "Hot_manifest");
-    if (!get_manifest) {
-        // Try VkModuleGetManifest (struct-based)
-        typedef const void *(*ManifestStructFn)(void);
-        ManifestStructFn get_manifest_struct = (ManifestStructFn)dlsym(handle, "VkModuleGetManifest");
-        if (!get_manifest_struct) {
-            snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "dlsym(Hot_manifest/VkModuleGetManifest) failed: %s", dlerror());
-            dlclose(handle);
-            return HOT_ERROR_DLSYM_FAILED;
-        }
-        // Register trampolines from the struct-based module
-        typedef const void *(*TrampolinesFn)(uint32_t*);
-        TrampolinesFn get_trampolines = (TrampolinesFn)dlsym(handle, "VkModuleGetTrampolines");
-        if (!get_trampolines) {
-            snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "dlsym(VkModuleGetTrampolines) failed: %s", dlerror());
-            dlclose(handle);
-            return HOT_ERROR_DLSYM_FAILED;
-        }
-        uint32_t trampoline_count = 0;
-        const void *trampolines = get_trampolines(&trampoline_count);
-        for (uint32_t i = 0; i < trampoline_count; i++) {
-            // Trampolines are {const char *name, void *function}
-            const struct { const char *name; void *fn; } *entries = trampolines;
-            int tidx = HotTrampolineTable_find(table, entries[i].name);
-            if (tidx < 0) tidx = HotTrampolineTable_register(table, entries[i].name);
-            if (tidx >= 0) HotTrampolineTable_set(table, tidx, entries[i].fn);
-        }
-        // Update module state
-        if ((*mod).handle) HotRetireRing_retire(ring, (*mod).handle);
-        (*mod).handle = handle;
-        (*mod).last_modified = file_mtime(dylib_path);
-        (*mod).loaded = true;
-        return HOT_OK;
-    }
-    
-    const char *manifest_json = get_manifest();
-    if (!manifest_json) {
+    // 2. Register trampolines from the module's struct contract.
+    //    (The retired HotManifest JSON path is gone — modules expose
+    //    VkModuleGetTrampolines, and the ladder placement is the gate.)
+    typedef const void *(*TrampolinesFn)(uint32_t*);
+    TrampolinesFn get_trampolines = (TrampolinesFn)dlsym(handle, "VkModuleGetTrampolines");
+    if (!get_trampolines) {
         snprintf((*hot).last_error, sizeof((*hot).last_error),
-                 "Hot_manifest returned NULL");
+                 "dlsym(VkModuleGetTrampolines) failed: %s", dlerror());
         dlclose(handle);
         return HOT_ERROR_DLSYM_FAILED;
     }
-    
-    // 3. Parse the manifest
-    HotManifest new_manifest;
-    if (!HotManifest_parse(manifest_json, strlen(manifest_json), &new_manifest)) {
-        snprintf((*hot).last_error, sizeof((*hot).last_error),
-                 "Failed to parse manifest for %s", (*mod).name);
-        dlclose(handle);
-        return HOT_ERROR_DLSYM_FAILED;
-    }
-    
-    // 4. Verify ABI compatibility (if previously loaded)
-    if ((*mod).loaded) {
-        if (!HotManifest_compatible(&(*mod).manifest, &new_manifest)) {
-            snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "ABI mismatch for module %s", (*mod).name);
-            dlclose(handle);
-            return HOT_ERROR_ABI_MISMATCH;
-        }
+    uint32_t trampoline_count = 0;
+    const void *trampolines = get_trampolines(&trampoline_count);
+    for (uint32_t i = 0; i < trampoline_count; i++) {
+        // Trampolines are {const char *name, void *function}
+        const struct { const char *name; void *fn; } *entries = trampolines;
+        int tidx = HotTrampolineTable_find(table, entries[i].name);
+        if (tidx < 0)
+            tidx = HotTrampolineTable_register(table, entries[i].name);
+        if (tidx >= 0)
+            HotTrampolineTable_set(table, tidx, entries[i].fn);
     }
 
-    // 4b. Phase-1: dependency gate (missing dep = retry next poll).
-    if (!dependencies_met(hot, &new_manifest, (*mod).name)) {
-        snprintf((*hot).last_error, sizeof((*hot).last_error),
-                 "missing dependency for module %s", (*mod).name);
-        dlclose(handle);
-        return HOT_ERROR_FILE_NOT_FOUND;
-    }
-
-    // 4c. Phase-1: save old state before the swap (best-effort, 256 bytes
-    // covers the Phase-2 tunables; larger modules skip when too small).
-    uint8_t saved[256];
-    size_t saved_len = 0;
-    if ((*mod).loaded && (*mod).handle) {
-        typedef bool (*SaveFn)(void*, size_t, size_t*);
-        SaveFn save = (SaveFn) dlsym((*mod).handle, "Hot_save");
-        if (save) {
-            size_t out = 0;
-            if (save(saved, sizeof(saved), &out) && out <= sizeof(saved))
-                saved_len = out;
-        }
-    }
-    
-    // 5. Call the module's init function
-    typedef bool (*InitFn)(void);
-    InitFn init = (InitFn)dlsym(handle, "Hot_init_module");
-    if (init) {
-        if (!init()) {
-            snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "Hot_init_module failed for %s", (*mod).name);
-            dlclose(handle);
-            return HOT_ERROR_INIT_FAILED;
-        }
-    }
-    
-    // 6. Register trampolines for all exports, with rollback snapshot.
-    // A mid-list dlsym failure used to leave a half-swapped table; now
-    // every touched entry restores its prior pointer on error.
-    int touched_idx[HOT_MANIFEST_MAX_EXPORTS];
-    void *touched_old[HOT_MANIFEST_MAX_EXPORTS];
-    uint32_t touched_count = 0;
-    for (uint32_t i = 0; i < new_manifest.export_count; i++) {
-        const char *export_name = new_manifest.exports[i].name;
-
-        // Find or create trampoline
-        int tidx = HotTrampolineTable_find(table, export_name);
-        if (tidx < 0) {
-            tidx = HotTrampolineTable_register(table, export_name);
-            if (tidx < 0) {
-                snprintf((*hot).last_error, sizeof((*hot).last_error),
-                         "Too many trampolines");
-                for (uint32_t r = 0; r < touched_count; r++)
-                    HotTrampolineTable_set(table, touched_idx[r], touched_old[r]);
-                dlclose(handle);
-                return HOT_ERROR_OUT_OF_MEMORY;
-            }
-        }
-
-        // Get the function pointer from the dylib
-        void *fn = dlsym(handle, export_name);
-        if (!fn) {
-            snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "dlsym(%s) failed: %s", export_name, dlerror());
-            for (uint32_t r = 0; r < touched_count; r++)
-                HotTrampolineTable_set(table, touched_idx[r], touched_old[r]);
-            dlclose(handle);
-            return HOT_ERROR_DLSYM_FAILED;
-        }
-
-        // Snapshot prior pointer, then atomic swap of the trampoline
-        void *old = HotTrampolineTable_get(table, tidx);
-        if (touched_count < HOT_MANIFEST_MAX_EXPORTS) {
-            touched_idx[touched_count] = tidx;
-            touched_old[touched_count] = old;
-            touched_count++;
-        }
-        HotTrampolineTable_set(table, tidx, fn);
-    }
-
-    // 6b. Phase-2: restore saved state into the new module. Same version
-    // takes the direct path; a version bump routes through Hot_migrate so
-    // additive struct growth (v1 8B -> v2 12B) survives the swap. A module
-    // without Hot_migrate keeps the direct path only when sizes allow —
-    // Hot_restore itself decides (see hot_behavior.c: it accepts both).
-    if (saved_len > 0) {
-        bool restored = false;
-        if (strcmp((*mod).manifest.version, new_manifest.version) != 0) {
-            typedef bool (*MigrateFn)(const char*, const void*, size_t, void*, size_t, size_t*);
-            MigrateFn migrate = (MigrateFn) dlsym(handle, "Hot_migrate");
-            if (migrate) {
-                uint8_t migrated[256];
-                size_t migrated_len = 0;
-                if (migrate((*mod).manifest.version, saved, saved_len,
-                            migrated, sizeof(migrated), &migrated_len)) {
-                    typedef bool (*RestoreFn)(const void*, size_t);
-                    RestoreFn restore = (RestoreFn) dlsym(handle, "Hot_restore");
-                    if (restore)
-                        restored = restore(migrated, migrated_len);
-                }
-            }
-        }
-        if (!restored) {
-            typedef bool (*RestoreFn)(const void*, size_t);
-            RestoreFn restore = (RestoreFn) dlsym(handle, "Hot_restore");
-            if (restore)
-                restore(saved, saved_len);
-        }
-    }
-
-    // 7. Update module state: shutdown + retire the old dylib AFTER the
-    // swap so in-flight calls land on the new code first.
-    if ((*mod).handle) {
-        typedef void (*ShutdownFn)(void);
-        ShutdownFn shutdown = (ShutdownFn) dlsym((*mod).handle, "Hot_shutdown_module");
-        if (shutdown)
-            shutdown();
-        // Retire old dylib to grace period ring after swap
-        HotRetireRing_retire(ring, (*mod).handle);
-    }
-    
+    // 3. Adopt the new handle; the old one retires to the grace ring.
+    if ((*mod).handle) HotRetireRing_retire(ring, (*mod).handle);
     (*mod).handle = handle;
-    (*mod).manifest = new_manifest;
     (*mod).last_modified = file_mtime(dylib_path);
     (*mod).loaded = true;
-    
+
     return HOT_OK;
 }
 
@@ -488,7 +311,6 @@ HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
             (*mod).path[HOT_PATH_LEN - 1] = '\0';
             (*mod).handle = NULL;
             (*mod).loaded = false;
-            memset(&(*mod).manifest, 0, sizeof((*mod).manifest));
         }
         
         // Check if file has been modified
@@ -526,8 +348,7 @@ HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
             memcpy(mod, &clone_mod, sizeof(HotModuleInternal));
             reloaded++;
             
-            fprintf(stderr, "[hot] reloaded %s v%s\n", 
-                    (*mod).name, (*mod).manifest.version);
+            fprintf(stderr, "[hot] reloaded %s\n", (*mod).name);
         } else {
             // Failed — clean up
             if (clone_mod.handle) {
@@ -553,14 +374,10 @@ const void *Hot_get_api(HotModule *hot, const char *module_name) {
     HotModuleInternal *mod = find_module(hot, module_name);
     if (!mod || !(*mod).loaded) return NULL;
     
-    // Return the module's function pointer table
-    // For now, return the first export's trampoline
-    if ((*mod).manifest.export_count == 0) return NULL;
-
+    // Return the module's primary entry point, looked up by its own name
+    // (the exported trampoline set after the struct-based swap).
     HotTrampolineTable *table = &(*hot).trampolines;
-    HotManifest *manifest = &(*mod).manifest;
-    HotExport *first = &(*manifest).exports[0];
-    int tidx = HotTrampolineTable_find(table, (*first).name);
+    int tidx = HotTrampolineTable_find(table, (*mod).name);
     if (tidx < 0) return NULL;
 
     return HotTrampolineTable_get(table, tidx);
