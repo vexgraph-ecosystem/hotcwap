@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#include "nio/mem.h"
+#include "spoke/vexspoke.h"
 #include "process/application.h"
 #include "process/console.h"
 #include "process/process.h"
@@ -87,8 +87,11 @@ typedef struct KernelDeferred {
 } KernelDeferred;
 
 struct Kernel {
-    MemoryArena *arena;                          // master session arena (owns structure)
-    MemoryArena *transientArena;                 // per-event scratch arena (reset, never freed mid-run)
+    VexspokeApi spoke;                     // vexspoke bridge table (sole vexspoke touchpoint)
+    void *arena;                           // opaque master arena (provider-attested, never dereferenced)
+    void *transientArena;                  // opaque scratch arena (reset, never freed mid-run)
+    uint64_t arenaType;                    // provider-reported id, nonzero = attested
+    uint64_t transientArenaType;           // provider-reported id, nonzero = attested
     Application *applications[KERNEL_MAX_APPS];  // windowed apps (opaque to engines)
     uint32_t applicationCount;                   // used slots in applications[]
     Process     *processes[KERNEL_MAX_PROCS];    // one-shot invokables
@@ -112,7 +115,11 @@ struct Kernel {
 //   Kernel()                           -> defaults (64MB master + 64MB transient)
 //   Kernel(arenaBytes, transientBytes) -> sized arenas
 //
-// Arenas come from MemoryArena_create (isolated slab sets, ABI-stable).
+// Arenas arrive through the spoke table as opaque handles (never
+// dereferenced, never named — kernel/ includes no vexspoke headers, so
+// hotcwap lives on its own). Handles carry the provider-reported type id;
+// nonzero means attested, null/zero fails boot loudly (fail-closed).
+// The manifest-id comparison upgrades the authority in the refresh phase.
 // The Kernel struct itself is calloc-owned in Phase 1 (mirrors
 // Application_0); migration to arena-owned Kernel is tracked via
 // ;;INTENTION in kernel.c per the Conflict Triage Law.
@@ -224,7 +231,7 @@ uint32_t Kernel_getConsoleCount(const Kernel *self);
 uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap);
 
 // --- Arena access (the Symmetric Getter/Setter Completeness Law symmetric getters) ---
-MemoryArena *Kernel_getArena(const Kernel *self);
-MemoryArena *Kernel_getTransientArena(const Kernel *self);
+void *Kernel_getArena(const Kernel *self);
+void *Kernel_getTransientArena(const Kernel *self);
 
 #endif

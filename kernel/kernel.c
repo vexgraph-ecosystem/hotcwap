@@ -8,7 +8,6 @@
 
 #include "annotation/intention.h"
 #include "annotation/overview.h"
-#include "vulkan/vk.h"
 #include "window/window.h"
 
 ;;OVERVIEW
@@ -27,8 +26,11 @@
  *
  * STRUCT FIELDS (Mirroring kernel/kernel.h — exactly this file's class):
  * ----------------------------------------------------------------------------
- *   MemoryArena *arena;                          // master session arena
- *   MemoryArena *transientArena;                 // per-event scratch arena
+ *   VexspokeApi spoke;                          // vexspoke bridge table (sole touchpoint)
+ *   void *arena;                                // opaque master arena (attested, never dereferenced)
+ *   void *transientArena;                       // opaque scratch arena
+ *   uint64_t arenaType;                         // provider id, nonzero = attested
+ *   uint64_t transientArenaType;                // provider id, nonzero = attested
  *   Application *applications[KERNEL_MAX_APPS];  // windowed apps (opaque handles)
  *   uint32_t applicationCount;                    // used slots in applications[]
  *   Process     *processes[KERNEL_MAX_PROCS];     // one-shot invokables
@@ -83,7 +85,7 @@
  */
 
 ;;INTENTION("Kernel struct is calloc-owned like Application_0; "
-            "arenas are MemoryArena-owned. Migrating the struct itself"
+            "arenas are provider-owned opaque handles. Migrating the struct itself"
             " into arena storage happens once the registries move to doubling arena slabs per the Dynamic Scalability & Anti-Hardcoding Law — keeps teardown order provable today per the Conflict Triage Law.")
 
 ;;INTENTION("Kernel_runApplication starts the app, shows its windows, then"
@@ -122,19 +124,29 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     Kernel *self = (Kernel*) calloc(1, sizeof(Kernel));
     if (!self)
         return NULL;
-    MemoryArena *arena = MemoryArena_create(arenaBytes);
-    if (!arena) {
+    // Bind the spoke table first: every arena below arrives through it, so
+    // this file never names a vexspoke type (hotcwap lives on its own).
+    if (!VexspokeApi_fillStatic(&(*self).spoke)) {
         free(self);
         return NULL;
     }
-    MemoryArena *scratch = MemoryArena_create(transientBytes);
-    if (!scratch) {
-        MemoryArena_destroy(arena);
+    uint64_t arenaType = 0;
+    void *arena = (*self).spoke.createArena(arenaBytes, &arenaType);
+    if (arena == nullptr || arenaType == 0) {
+        free(self);
+        return NULL;
+    }
+    uint64_t scratchType = 0;
+    void *scratch = (*self).spoke.createArena(transientBytes, &scratchType);
+    if (scratch == nullptr || scratchType == 0) {
+        (*self).spoke.destroyArena(arena);
         free(self);
         return NULL;
     }
     (*self).arena = arena;
+    (*self).arenaType = arenaType;
     (*self).transientArena = scratch;
+    (*self).transientArenaType = scratchType;
     (*self).applicationCount = 0;
     (*self).processCount = 0;
     (*self).consoleCount = 0;
@@ -159,9 +171,11 @@ bool Kernel_free(Kernel *self) {
     }
     Kernel_stop(self);
 
-    if (Vk_ready())
-        Vk_shutdown();
-
+    // No Vulkan teardown here: the device lifecycle (init/shutdown) is owned
+    // entirely by graphvex and driven through its own registration path.
+    // The Kernel never names Vk_* — see the Teardown Order Law: graphvex
+    // tears its device down before the arenas free below, ordered by whoever
+    // holds the GfxLoop registration, not by the supervisor.
     pthread_mutex_destroy(&(*self).addLock);
     free((*self).deferred);
     (*self).deferred = NULL;
@@ -178,14 +192,16 @@ bool Kernel_free(Kernel *self) {
         (*self).consoles[i] = NULL;
     (*self).consoleCount = 0;
 
-    MemoryArena *scratch = (*self).transientArena;
-    MemoryArena *arena = (*self).arena;
+    void *scratch = (*self).transientArena;
+    void *arena = (*self).arena;
     (*self).transientArena = NULL;
+    (*self).transientArenaType = 0;
     (*self).arena = NULL;
+    (*self).arenaType = 0;
     if (scratch)
-        MemoryArena_destroy(scratch);
+        (*self).spoke.destroyArena(scratch);
     if (arena)
-        MemoryArena_destroy(arena);
+        (*self).spoke.destroyArena(arena);
     free(self);
     return true;
 }
@@ -647,13 +663,13 @@ uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
     return n;
 }
 
-MemoryArena *Kernel_getArena(const Kernel *self) {
+void *Kernel_getArena(const Kernel *self) {
     if (!self)
         return NULL;
     return (*self).arena;
 }
 
-MemoryArena *Kernel_getTransientArena(const Kernel *self) {
+void *Kernel_getTransientArena(const Kernel *self) {
     if (!self)
         return NULL;
     return (*self).transientArena;
