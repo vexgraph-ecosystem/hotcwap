@@ -1,71 +1,85 @@
 #include "hot/vk_context.h"
+#include "vulkan/vk.h"
+#include "vulkan/vk_mac.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
-#include <vulkan/vulkan.h>
+
 #include "annotation/overview.h"
 
 ;;OVERVIEW
 /**
  * ============================================================================
-  * CLASS: VkLoader (hot/vk_loader.c)
-  * LEVEL: L4 — Self-Management (owns VkDevice; loader machinery surviving reload)
-  * ============================================================================
-  * VkDevice owner and Vulkan module loader.
-  *
-  * STRUCT FIELDS (local to this file — exactly this file's class):
-  * ----------------------------------------------------------------------------
-  *   Trampoline (one row per exported symbol):
-  *     _Atomic(void*) ptr;                    // current generation target
-  *     _Atomic(void*) fallback_ptr;           // prior generation (mid-swap cover)
-  *     char name[64];                         // export symbol name
-  *
-  *   VkRetiredHandle (one parked dylib):
-  *     void *handle;                          // retired dylib (nullptr = free slot)
-  *     uint32_t generation;                   // reload generation when retired
-  *
-  *   Module statics (file-scope, own the device across reloads):
-  *     VkInstance s_instance;                 // loader-owned instance
-  *     VkPhysicalDevice s_phys;               // loader-owned physical device
-  *     VkDevice s_device;                     // loader-owned device (survives reload)
-  *     VkQueue s_queue;                       // loader-owned queue
-  *     uint32_t s_queue_family;               // queue family index
-  *     VkPipelineCache s_cache;               // pipeline cache handle
-  *
-  * FUNCTION REGISTRY:
-  * ----------------------------------------------------------------------------
-  * Core Functions:
-  *   - hot_vk_init_loader(instance, phys, device, queue, queue_family)
-  *   - hot_vk_load_module(path)
-  *   - hot_vk_shutdown(void)
-  *   - vk_retire_handle(handle)
-  *   - vk_advance_generation(void)
-  *
-  * Getters:
-  *   - hot_vk_get_symbol(name)
-  * ============================================================================
-  */
+ *  * MODULE: VkLoader (hot/vk_loader.c)
+ *  * LEVEL: L4 — Self-Management (module hot-reload shim over graphvex Vulkan)
+ *  * ============================================================================
+ *  * vk_loader.c is the thin module hot-reload adapter. It does NOT create a
+ *  * VkInstance or VkDevice — those are owned entirely by graphvex (vk_instance.c
+ *  * via the Vk_* seam). vk_loader.c's job:
+ *  *   1. Load a Vulkan .dylib module via dlopen
+ *  *   2. Extract the module's manifest + trampoline table
+ *  *   3. Verify ABI compatibility (type IDs match frozen contracts)
+ *  *   4. Atomically swap function pointers via the trampoline table
+ *  *   5. Retire old dylibs safely across reload generations
+ *  *   6. Persist + restore pipeline cache (VkPipelineCache handle obtained
+ *  *      from graphvex, not created locally)
+ *
+ *  * All Vulkan handles flow from graphvex's Vk_* accessors:
+ *  *   Vk_getInstance() / Vk_getGpa()  — for instance-level loader calls
+ *  *   Vk_getDevice() / Vk_getGdpa()   — for device-level loader calls
+ *  *   Vk_getQueue() / Vk_getQueueFamily()
+ *
+ *  * STRUCT FIELDS (local to this file):
+ *  * ----------------------------------------------------------------------------
+ *  *   Trampoline (one row per exported symbol):
+ *  *     _Atomic(void*) ptr;                    // current generation target
+ *  *     _Atomic(void*) fallback_ptr;           // prior generation (mid-swap cover)
+ *  *     char name[64];                         // export symbol name
+ *  *
+ *  *   VkRetiredHandle (one parked dylib):
+ *  *     void *handle;                          // retired dylib (nullptr = free slot)
+ *  *     uint32_t generation;                   // reload generation when retired
+ *  *
+ *  *   Module statics:
+ *  *     void *s_module_handle;                // currently loaded dylib
+ *  *     bool s_initialized;                   // module ready
+ *  *     VkPipelineCache s_cache;              // pipeline cache (from graphvex)
+ *  *     PFN_vkCreatePipelineCache s_createCache;  // resolved via gdpa
+ *  *     PFN_vkDestroyPipelineCache s_destroyCache;
+ *  *     PFN_vkGetPipelineCacheData s_getCacheData;
+ *
+ *  * FUNCTION REGISTRY:
+ *  * ----------------------------------------------------------------------------
+ *  * Core Functions:
+ *  *   - hot_vk_init_loader(void)
+ *  *   - hot_vk_load_module(path)
+ *  *   - hot_vk_shutdown(void)
+ *  *   - vk_retire_handle(handle)
+ *  *   - vk_advance_generation(void)
+ *  *
+ *  * Getters:
+ *  *   - hot_vk_get_symbol(name)
+ *  * ============================================================================
+ */
 
-
-// hot/vk_loader.c — VkDevice owner and Vulkan module loader.
+// hot/vk_loader.c — thin module hot-reload adapter over graphvex Vulkan.
 //
-// This is the CRITICAL architectural piece: the VkDevice is created HERE,
-// in the loader, NOT in the vulkan module. When the module is reloaded,
-// the device persists. The module only creates pipelines/render passes
-// that are recreated on each reload.
-
-static VkInstance s_instance = VK_NULL_HANDLE;
-static VkPhysicalDevice s_phys = VK_NULL_HANDLE;
-static VkDevice s_device = VK_NULL_HANDLE;
-static VkQueue s_queue = VK_NULL_HANDLE;
-static uint32_t s_queue_family = 0;
-static VkPipelineCache s_cache = VK_NULL_HANDLE;
+// The VkDevice is owned by graphvex (Vk_init in vk_instance.c). vk_loader.c
+// only manages dylib loading, trampoline table atomics, and pipeline cache
+// persistence. All Vulkan handles are obtained via Vk_get*() accessors.
 
 // Module handle
 static void *s_module_handle = nullptr;
 static bool s_initialized = false;
+
+// Pipeline cache state — handle obtained from graphvex, functions resolved
+// through Vk_getGdpa(). We don't create our own device.
+static VkPipelineCache s_cache = VK_NULL_HANDLE;
+static PFN_vkCreatePipelineCache s_createCache = nullptr;
+static PFN_vkDestroyPipelineCache s_destroyCache = nullptr;
+static PFN_vkGetPipelineCacheData s_getCacheData = nullptr;
 
 // Function pointers from the module
 static VkModuleInitFn s_module_init = nullptr;
@@ -137,6 +151,7 @@ static uint32_t s_vk_generation = 0;
 static void vk_retire_handle(void *handle) {
     if (!handle) return;
 
+    // Reap old generations
     for (size_t i = 0; i < VK_RETIRED_MAX; i++) {
         if (s_vk_retired[i].handle && (s_vk_generation - s_vk_retired[i].generation >= VK_RETIRED_GENERATIONS)) {
             dlclose(s_vk_retired[i].handle);
@@ -144,6 +159,7 @@ static void vk_retire_handle(void *handle) {
         }
     }
 
+    // Find a free slot
     size_t slot = VK_RETIRED_MAX;
     for (size_t i = 0; i < VK_RETIRED_MAX; i++) {
         if (!s_vk_retired[i].handle) {
@@ -153,6 +169,7 @@ static void vk_retire_handle(void *handle) {
     }
 
     if (slot == VK_RETIRED_MAX) {
+        // Evict oldest if all slots full
         size_t oldest_idx = 0;
         uint32_t oldest_gen = UINT32_MAX;
         for (size_t i = 0; i < VK_RETIRED_MAX; i++) {
@@ -179,15 +196,34 @@ static void vk_advance_generation(void) {
     }
 }
 
-// Initialize the Vulkan loader — creates the device
-bool hot_vk_init_loader(VkInstance instance, VkPhysicalDevice phys, 
-                        VkDevice device, VkQueue queue, uint32_t queue_family) {
-    s_instance = instance;
-    s_phys = phys;
-    s_device = device;
-    s_queue = queue;
-    s_queue_family = queue_family;
-    
+// Resolve pipeline cache function pointers from graphvex's gdpa accessor.
+// Called once during init; cached as statics for hot path efficiency.
+static bool resolveCacheFns(void) {
+    if (!s_createCache) {
+        PFN_vkGetDeviceProcAddr gdpa = Vk_getGdpa();
+        if (!gdpa) return false;
+        s_createCache = (PFN_vkCreatePipelineCache)gdpa(Vk_getDevice(), "vkCreatePipelineCache");
+        s_destroyCache = (PFN_vkDestroyPipelineCache)gdpa(Vk_getDevice(), "vkDestroyPipelineCache");
+        s_getCacheData = (PFN_vkGetPipelineCacheData)gdpa(Vk_getDevice(), "vkGetPipelineCacheData");
+    }
+    return s_createCache && s_destroyCache && s_getCacheData;
+}
+
+// Initialize the Vulkan module loader shim.
+// Vk_init() must have been called first (by the caller) so the device exists.
+bool hot_vk_init_loader(void) {
+    if (!Vk_ready())
+        return false;
+
+    // Grab the device handle from graphvex.
+    VkDevice dev = Vk_getDevice();
+    if (dev == VK_NULL_HANDLE)
+        return false;
+
+    // Resolve cache function pointers from graphvex's seam.
+    if (!resolveCacheFns())
+        return false;
+
     // Create pipeline cache, seeded from disk when a prior run saved one.
     // The cache blob is driver-versioned: vkCreatePipelineCache rejects
     // stale data itself, so a corrupt/mismatched file just falls back to
@@ -217,11 +253,13 @@ bool hot_vk_init_loader(VkInstance instance, VkPhysicalDevice phys,
         .initialDataSize = cache_size,
         .pInitialData = cache_data,
     };
-    vkCreatePipelineCache(s_device, &cache_ci, nullptr, &s_cache);
+    s_createCache(dev, &cache_ci, nullptr, &s_cache);
     if (cache_data)
         free(cache_data);
-    
-    printf("[vk_loader] initialized (device=%p)\n", (void*) s_device);
+
+    s_initialized = true;
+    printf("[vk_loader] initialized (device=%p, cache=%p)\n",
+           (void*) Vk_getDevice(), (void*) s_cache);
     return true;
 }
 
@@ -235,44 +273,44 @@ bool hot_vk_load_module(const char *path) {
         s_module_handle = nullptr;
         s_initialized = false;
     }
-    
+
     s_module_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!s_module_handle) {
         fprintf(stderr, "[vk_loader] dlopen failed: %s\n", dlerror());
         return false;
     }
-    
+
     // Get module functions
     s_module_init = (VkModuleInitFn)dlsym(s_module_handle, "VkModuleInit");
     s_module_shutdown = (VkModuleShutdownFn)dlsym(s_module_handle, "VkModuleShutdown");
     s_module_get_trampolines = (VkModuleGetTrampolinesFn)dlsym(s_module_handle, "VkModuleGetTrampolines");
     s_module_get_manifest = (VkModuleGetManifestFn)dlsym(s_module_handle, "VkModuleGetManifest");
-    
+
     if (!s_module_init || !s_module_get_trampolines || !s_module_get_manifest) {
         fprintf(stderr, "[vk_loader] missing required exports\n");
         dlclose(s_module_handle);
         s_module_handle = nullptr;
         return false;
     }
-    
+
     // Get manifest and verify ABI
     const VkModuleManifest *manifest = s_module_get_manifest();
     printf("[vk_loader] loading %s v%s\n", (*manifest).name, (*manifest).version);
-    
-    // Build the context
+
+    // Build the context from graphvex's seam — all handles flow from here.
     VkHotContext context = {
-        .instance = s_instance,
-        .physical_device = s_phys,
-        .device = s_device,
-        .queue = s_queue,
-        .queue_family = s_queue_family,
+        .instance = Vk_getInstance(),
+        .physical_device = Vk_getPhys(),
+        .device = Vk_getDevice(),
+        .queue = Vk_getQueue(),
+        .queue_family = Vk_getQueueFamily(),
         .pipeline_cache = s_cache,
         .pipeline_cache_path = "hot/.pipeline_cache",
         .vulkan_api_version = VK_API_VERSION_1_2,
         .pipeline_cache_size = 0,
         .texture_registry = nullptr,
     };
-    
+
     // Initialize the module
     if (!s_module_init(&context)) {
         fprintf(stderr, "[vk_loader] module init failed\n");
@@ -280,7 +318,7 @@ bool hot_vk_load_module(const char *path) {
         s_module_handle = nullptr;
         return false;
     }
-    
+
     // Register trampolines
     uint32_t trampoline_count = 0;
     const VkTrampolineEntry *trampolines = s_module_get_trampolines(&trampoline_count);
@@ -295,13 +333,13 @@ bool hot_vk_load_module(const char *path) {
             atomic_store(&s_trampolines[idx].ptr, trampolines[i].function);
         }
     }
-    
+
     s_initialized = true;
     printf("[vk_loader] module loaded (%u trampolines)\n", trampoline_count);
     return true;
 }
 
-// Shutdown the Vulkan loader
+// Shutdown the Vulkan module loader shim
 void hot_vk_shutdown(void) {
     if (s_module_shutdown) s_module_shutdown();
     if (s_module_handle) {
@@ -315,15 +353,17 @@ void hot_vk_shutdown(void) {
         }
     }
     s_initialized = false;
-    
+
     // Persist + destroy pipeline cache. vkGetPipelineCacheData sizes the
-    // blob; a zero size or error simply skips the write.
-    if (s_cache) {
+    // blob; a zero size or error simply skips the write. All handles come
+    // from graphvex's seam.
+    if (s_cache && s_getCacheData) {
         size_t data_size = 0;
-        if (vkGetPipelineCacheData(s_device, s_cache, &data_size, nullptr) == VK_SUCCESS && data_size > 0) {
+        VkDevice dev = Vk_getDevice();
+        if (s_getCacheData(dev, s_cache, &data_size, nullptr) == VK_SUCCESS && data_size > 0) {
             uint8_t *data = (uint8_t*) malloc(data_size);
             if (data) {
-                if (vkGetPipelineCacheData(s_device, s_cache, &data_size, data) == VK_SUCCESS) {
+                if (s_getCacheData(dev, s_cache, &data_size, data) == VK_SUCCESS) {
                     FILE *cache_out = fopen("hot/.pipeline_cache", "wb");
                     if (cache_out) {
                         fwrite(data, 1, data_size, cache_out);
@@ -333,9 +373,10 @@ void hot_vk_shutdown(void) {
                 free(data);
             }
         }
-        vkDestroyPipelineCache(s_device, s_cache, nullptr);
+        if (s_destroyCache)
+            s_destroyCache(Vk_getDevice(), s_cache, nullptr);
         s_cache = VK_NULL_HANDLE;
     }
-    
+
     printf("[vk_loader] shutdown\n");
 }
