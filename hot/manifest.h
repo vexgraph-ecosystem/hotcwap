@@ -5,37 +5,62 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// hot/manifest.h — the MANIFEST(...) install-layout authority.
+// hot/manifest.h — the MANIFEST(...) install-layout + manifest.json catalog authority.
 //
-// The "manifest binary way": the manifest IS the on-disk install tree, not
-// a JSON policy seed. MANIFEST(...) resolves the per-app install root from
-// the platform application-data base, creating directories as it goes, and
-// the MANIFEST_* verbs walk that ladder. MANIFEST.mf is retired — there is
-// no separate policy file to keep in sync.
+// The "manifest binary way": the manifest IS the on-disk install tree PLUS
+// the manifest.json library catalog. MANIFEST(...) resolves the per-app
+// install root from the platform application-data base and locks it;
+// MANIFEST_LIBRARY(...) registers the hosted library keys; the ladder holds
+// one generation set PER LIBRARY; manifest.json declares each library's
+// allowed section list (dylib stems) that downloads must satisfy.
 //
 // SCREAMING_CASE surface, hotcwap-style:
-//   MANIFEST("semicolon", (const char*) 0)   // ONE-TIME init (see below)
-//   MANIFEST_UPDATE()                        // verify staged set (bin/new)
-//   MANIFEST_PROMOTE()                       // new → current finale
-//   MANIFEST_ENSURE()                        // create the full ladder
+//   MANIFEST(MANIFEST_APP_DATA, "vexgraph", "semicolon") // ONE-TIME init
+//   MANIFEST_LIBRARY("vexspoke", "graphvex", ..., 0)     // register library keys
+//   MANIFEST_UPDATE("graphvex", payloadDir)              // stage bin/new/graphvex/
+//   MANIFEST_PROMOTE()                                   // per-library slide
+//   MANIFEST_ENSURE()  MANIFEST_REFLECT(...)  MANIFEST_IS_FIRST_RUN()
 //
 // Per-app layout under APPLICATION_DATA + org + <app>:
-//   bin/backward    oldest retained set (rollback)
-//   bin/previous    prior generation (rollback)
-//   bin/current     the runnable set — what the launcher dlopens
-//   bin/new         staged future set (downloads land here)
-//   hot/            live hot-swap dir — the Mode-1 Hot_poll watch dir
-//   cache/          cache system
+//   manifest.json        library catalog {name, version, org, libraries{}}
+//   bin/backward/<lib>   oldest retained set (rollback), per library
+//   bin/previous/<lib>   prior generation (rollback), per library
+//   bin/current/<lib>    the runnable set — what the launcher dlopens
+//   bin/new/<lib>        staged future set (downloads land here)
+//   hot/                 live hot-swap dir — the Mode-1 Hot_poll watch dir
+//   cache/               cache system
+//
+// manifest.json is the plain JSON catalog any runtime may edit (it is the
+// downloader's entry point, not R1's own state). Example:
+//
+//   {
+//     "name": "semicolon",
+//     "version": "0.1.0",
+//     "org": "vexgraph",
+//     "libraries": {
+//       "vexspoke": ["io", "memory", "types"],
+//       "graphvex": ["buffer", "texture", "spv"]
+//     }
+//   }
+//
+// The DOWNLOADER (vexspoke or any runtime) owns the section lists: it edits
+// manifest.json to add a section ("video") BEFORE staging a payload that
+// carries it, so MANIFEST_UPDATE only ever verifies against declared sections
+// (fail-closed). MANIFEST_REFLECT seeds sections on first-run from the
+// bundled payload. Dylib naming is automatic from the stem: "io" ships as
+// io.dylib / io.dll / libio.so by platform.
 //
 // Two experiences share this tree: MODE 1 (app RUNNING) swaps dylibs live
 // via Hot_poll while current/ stays pinned; MODE 2 (app CLOSED) promotes
 // new/ → current/ with renames so the next launch is the new binary.
 // See docs/install.md for the full process.
 
-// --- Hotloading constants (consumed by hot/ trampolines and module slots) ----
+// --- Hotloading & catalog constants (consumed by hot/ trampolines and this file) ----
 
 #define HOT_MANIFEST_MAX_NAME 64
 #define HOT_MANIFEST_MAX_EXPORTS 128
+#define HOT_MANIFEST_MAX_LIBRARIES 32
+#define HOT_MANIFEST_MAX_SECTIONS 64
 
 // --- Path roots & base defines ----------------------------------------------
 
@@ -49,7 +74,8 @@
 #  define APPLICATION_PATH ".local/share"
 #endif
 
-// The ecosystem org folder under the application-data base.
+// The ecosystem org folder under the application-data base (default org in
+// MANIFEST() calls; resource roots still nest underneath it).
 #define MANIFEST_ORG "vexgraph"
 
 // Install fingerprint file dropped in bin/current after first-run reflection.
@@ -64,7 +90,8 @@ typedef enum ManifestRoot {
 } ManifestRoot;
 
 // Ladder slots, oldest → newest staging. VERBS promote NEW → CURRENT;
-// CURRENT → PREVIOUS → BACKWARD keeps the rollback sets.
+// CURRENT → PREVIOUS → BACKWARD keeps the rollback sets. Each slot carries
+// one subfolder per registered library.
 typedef enum ManifestLadder {
     MANIFEST_LADDER_BACKWARD = 0,
     MANIFEST_LADDER_PREVIOUS,
@@ -82,49 +109,66 @@ typedef struct ManifestPath {
 
 // Constructors:
 //   ManifestPath(dest, cap)           — bind a builder to a caller buffer.
-//   MANIFEST(app, ...)                — one-shot init + create dirs (below).
+//   MANIFEST(kind, org, app)          — one-shot init + create dirs (below).
 
 ManifestPath ManifestPath_0(char *dest, size_t cap);
 
 // --- CORE FUNCTIONS ----------------------------------------------------------
 
-// ONE-TIME initializer. MANIFEST(app, ...) — varargs, must end with
-// (const char*) 0 — resolves <application-base>/<org>/<app>/..., creating
-// each directory as it goes, and locks the root for every MANIFEST_* verb.
+// ONE-TIME initializer. MANIFEST(kind, org, app) resolves
+// <application-base>/<org>/<app>/... on the platform application-data root,
+// creating directories as it goes, locks the root for every MANIFEST_* verb,
+// and seeds manifest.json {name, version, org, libraries{}} when absent.
 //
-//   MANIFEST("semicolon", (const char*) 0)
+//   MANIFEST(MANIFEST_APP_DATA, "vexgraph", "semicolon")
 //   → macOS:  ~/Library/Application Support/vexgraph/semicolon
 //   → Windows: %LOCALAPPDATA%\vexgraph\semicolon
 //
 // THE SECOND CALL FAILS (returns false). The manifest initializes once —
 // two launchers must never mount the same ladder. Returns false on a
 // second call or any resolution/mkdir failure.
-bool MANIFEST(const char *first, ...);
+bool MANIFEST(ManifestRoot kind, const char *org, const char *app);
+
+// Register the hosted library KEYS in manifest.json (creating the file's
+// libraries{} on first call). Varargs, must end with (const char*) 0:
+//
+//   MANIFEST_LIBRARY("vexspoke", "graphvex", (const char*) 0)
+//
+// Each key is added with an empty section list — the downloader owns the
+// section arrays (edits manifest.json to grow them). Creates the per-library
+// ladder subfolders in every slot. MUST be called after MANIFEST() (the
+// ;;INTENTION in manifest.c). Returns false if never mounted / unregistered.
+bool MANIFEST_LIBRARY(const char *first, ...);
 
 // Return the locked root (<application-base>/<org>/<app>). Buffer valid until
 // the next ManifestPath call. Returns nullptr when MANIFEST() never ran.
 const char *MANIFEST_ROOT(void);
 
-// Create the whole per-app ladder (bin/{backward,previous,current,new},
-// hot, cache). Idempotent. Returns true when every dir exists.
+// Create the whole per-app ladder (bin/{backward,previous,current,new} plus
+// one subfolder per registered library, hot, cache). Idempotent. Returns
+// true when every dir exists.
 bool MANIFEST_ENSURE(void);
 
-// Reflect binaries: copy `sourceDir` payloads into bin/current (the first-run
-// install step). Idempotent via the fingerprint in MANIFEST_MARK. Returns
-// false on any copy failure or when the fingerprint cannot be written — the
-// launcher retries next launch.
-bool MANIFEST_REFLECT(const char *sourceDir);
+// First-run reflection of one library: seed its section list in manifest.json
+// from the bundled payload at sourceDir, copy the payload into
+// bin/current/<library>, and drop the install fingerprint. Idempotent via the
+// fingerprint in MANIFEST_MARK; returns false on any copy failure.
+bool MANIFEST_REFLECT(const char *library, const char *sourceDir);
 
-// Update staging: verify the staged set in bin/new has content (at least one
-// regular file). Vexspoke validates content before placing — this verb
-// checks the ladder state. Verify only — never promotes. Returns true when
-// a promotion is safe.
-bool MANIFEST_UPDATE(void);
+// Update staging: verify every top-level entry of payloadDir is a DECLARED
+// section of <library> in manifest.json (dylib stems match by name, extension
+// stripped), then stage the payload into bin/new/<library> (replacing any
+// prior staged set). Fail-closed per the Cold-Strict, Hot-Minimal Validation
+// Law: an undeclared payload section refuses the WHOLE update. Verify only —
+// never promotes. Returns true when a promotion is safe.
+bool MANIFEST_UPDATE(const char *library, const char *payloadDir);
 
-// MODE-2 finale: promote the ladder (renames, same filesystem, atomic).
+// MODE-2 finale: per-library generation slide. For every library with staged
+// content in bin/new/<library>, slide (renames, same filesystem, atomic):
 //   current → previous → backward   (rollback sets slide, oldest dropped)
 //   new     → current
-// Returns false if any rename fails (nothing is half-applied).
+// Libraries with no staged set stay pinned. Returns false if any rename fails
+// (nothing is half-applied for the failing library).
 bool MANIFEST_PROMOTE(void);
 
 // First-run detection: true when the tree was never installed (no
@@ -141,12 +185,20 @@ bool ManifestPath_push(ManifestPath *self, const char *segment, bool create);
 // Resolve an OS root into a builder (no mkdir — the root always exists).
 bool ManifestPath_begin(ManifestPath *self, ManifestRoot kind);
 
-// Ladder dir <locked root>/bin/<slot>. create=true also mkdirs it.
+// Ladder slot dir <locked root>/bin/<slot>. create=true also mkdirs it.
 bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool create);
+
+// Per-library ladder dir <locked root>/bin/<slot>/<library>. create=true
+// also mkdirs it. Returns false when the library name is invalid or the
+// manifest never mounted.
+bool ManifestPath_libraryDir(ManifestLadder slot, const char *library, char *dest, size_t cap, bool create);
 
 // hot/ and cache/ dirs under the locked root.
 bool ManifestPath_hotDir(char *dest, size_t cap);
 bool ManifestPath_cacheDir(char *dest, size_t cap);
+
+// The catalog file <locked root>/manifest.json (created on first save).
+bool ManifestPath_manifestJson(char *dest, size_t cap);
 
 // --- GETTERS -----------------------------------------------------------------
 
