@@ -7,14 +7,30 @@
 
 // hot/hot.h — Hotloading system for vex.
 //
-// Each directory in the engine is a dynamically-loaded module (.dylib/.so).
-// Type IDs are frozen ABI contracts — they never change across reloads.
-// The hotloader watches for new dylibs, verifies ABI compatibility,
-// and atomically swaps function pointer tables (trampolines).
+// THE MANIFEST IS THE MANIFESTATION: a HotModule is bound to one manifest
+// LIBRARY key (the bin/current/<library> ladder slot), not to a watched
+// directory. The swap trigger is the per-library generation stamp
+// (bin/current/<library>.generation): MANIFEST_PROMOTE bumps it for every
+// promoted library, and Hot_poll reloads bin/current/<library> when the
+// stamp moves. The rename slide IS the swap — no clone step, no watch dir.
+//
+// Hot_poll() is a two-phase handshake on MANIFEST_UPDATE/PROMOTE:
+//   1. snapshot the CURRENT generation's module state OFF-THREAD (a worker
+//      thread), so hot loops never pay the serialization cost, then
+//   2. on a later pass, dlopen every section from bin/current/<library>,
+//      verify the whole library (fail-closed), atomically swap the
+//      trampoline table, restore the saved blobs, and retire the old
+//      handles into the grace ring.
+//
+// Old handles stay mapped HOT_RETIRED_GENERATIONS polls (the retire ring)
+// so in-flight calls into the old generation drain before dlclose.
 //
 // The window/AppKit side is owned by the OS, not the engine. When a dylib
 // is reloaded, the NSWindow/NSView/CAMetalLayer persist — only the Vulkan
 // swapchain and GPU objects are recreated.
+//
+// Hot_poll() runs on main thread only; the state-save worker is this class's
+// one supervised thread (joined bounded per the Bounded Wait Law).
 
 typedef enum {
     HOT_OK = 0,
@@ -30,27 +46,32 @@ typedef enum {
 // Module handle — opaque
 typedef struct HotModule HotModule;
 
-// Initialize the hotloader. hot_dir is the directory to watch (e.g., "hot/").
-// Returns NULL on failure.
-HotModule *Hot_init(const char *hot_dir);
+// Bind the hotloader to one manifest library key (e.g. "hot_behavior").
+// Requires the manifest to be mounted first (MANIFEST() must have run; the
+// library may be reflected or not yet installed). Returns NULL on failure.
+HotModule *Hot_init(const char *library);
 
-// Shutdown the hotloader and unload all modules.
+// Shutdown the hotloader: bounded-join the save worker FIRST (its cond wait
+// is capped), then close every module, drain the retire ring, free.
 void HotShutdown(HotModule *hot);
 
-// Poll for updates. Call once per frame from the main loop.
-// Returns HOT_OK if nothing changed, HOT_OK + loaded_count > 0 if modules were reloaded.
+// Poll for updates. Call once per frame from the main loop (main thread
+// only). Reloads bin/current/<library> when the generation stamp moves;
+// returns HOT_OK if nothing changed, HOT_OK + loaded_count > 0 when a swap
+// landed. A swap that must preserve state spans two polls: this call kicks
+// the off-thread snapshot and returns; the NEXT call swaps once the worker
+// has published it.
 HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count);
 
-// Get the current API for a module by name.
-// Returns NULL if the module is not loaded.
-// The returned pointer is stable until the next reload.
-const void *Hot_get_api(HotModule *hot, const char *module_name);
-
-// Get a function pointer by name.
-// Returns NULL if the symbol is not found in any loaded module.
-// The returned pointer is stable until the next reload of that module.
+// Get a function pointer by name (trampoline table lookup, stable until the
+// next swap of its module).
 typedef void (*HotFn)(void);
 HotFn Hot_get_symbol(HotModule *hot, const char *name);
+
+// Last-seen generation of bin/current/<library> (0 before any successful
+// load/swap). Getters: after a swap Hot_poll advances this; it equals
+// MANIFEST_GENERATION(<library>) when the loader and ladder are in sync.
+uint64_t Hot_get_generation(const HotModule *hot);
 
 // Get the last error string (for diagnostics).
 const char *Hot_last_error(HotModule *hot);
@@ -59,9 +80,9 @@ const char *Hot_last_error(HotModule *hot);
 // Shutdown calls the module's Hot_shutdown_module (if exported) on the
 // currently loaded handle. Save/Restore move an opaque state blob across
 // a swap: Hot_poll saves from the old handle before dlopen and restores
-// into the new handle after Hot_init_module. Modules without Hot_save /
-// Hot_restore simply skip the handoff. Returns false when the module is
-// unknown, unloaded, or the symbol is missing / buffer too small.
+// into the new handle after load. Modules without Hot_save / Hot_restore
+// simply skip the handoff. Returns false when the module is unknown,
+// unloaded, or the symbol is missing / buffer too small.
 void Hot_shutdown_module(HotModule *hot, const char *module_name);
 bool Hot_save_module(HotModule *hot, const char *module_name, void *buf, size_t cap, size_t *outLen);
 bool Hot_restore_module(HotModule *hot, const char *module_name, const void *buf, size_t len);

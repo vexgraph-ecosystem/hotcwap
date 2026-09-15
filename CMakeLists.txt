@@ -45,16 +45,17 @@ target_compile_options(hotcwap PRIVATE -Wall -Wextra -Werror)
 
 # Phase-1 L2 behavior subject: pure pulse/bar math + texture path.
 # Host handlers delegate here; module holds no GPU/Panel state so swap is
-# safe by construction. Output lands in ${CMAKE_BINARY_DIR}/hot next to the
-# umbrella test_suite's watch dir; copy to ./hot/ when running from source.
+# safe by construction. Output lands in ${CMAKE_BINARY_DIR}/modules; the
+# manifest ladder (MANIFEST_REFLECT/UPDATE/PROMOTE) and manifest_hot_test
+# REPLACE the retired ${CMAKE_BINARY_DIR}/hot watch dir.
 add_library(hot_behavior MODULE hot/hot_behavior.c)
 target_include_directories(hot_behavior PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../vexspoke/src)
 target_compile_options(hot_behavior PRIVATE -Wall -Wextra -Werror)
 set_target_properties(hot_behavior PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hot"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hot")
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules")
 
 # Check if vexspoke is already available as a target (parent build)
 if(NOT TARGET vexspoke)
@@ -187,6 +188,23 @@ if(NOT TARGET window_event_test AND EXISTS "${HOTCWAP_TEST_DIR}/window_event_tes
     target_include_directories(window_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(window_event_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(window_event_test PRIVATE hotcwap)
+endif()
+
+# End-to-end manifest-ladder hot reload: REFLECT (gen 1) → load → UPDATE +
+# PROMOTE (gen 2) → two-poll generation-driven swap. Builds its own scratch
+# $VEX_MANIFEST and copies hot_behavior.so into a payload dir, so it exercises
+# the real loader (hot.c) against the real ladder, not a unit stub. Passed the
+# built module path as HOT_BEHAVIOR_MODULE.
+if(NOT TARGET manifest_hot_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_hot_test.c")
+    add_executable(manifest_hot_test
+        ${HOTCWAP_TEST_DIR}/manifest_hot_test.c
+    )
+    target_include_directories(manifest_hot_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(manifest_hot_test PRIVATE -Wall -Wextra -Werror)
+    target_compile_definitions(manifest_hot_test PRIVATE
+        HOT_BEHAVIOR_MODULE="$<TARGET_FILE:hot_behavior>")
+    target_link_libraries(manifest_hot_test PRIVATE hotcwap)
+    add_dependencies(manifest_hot_test hot_behavior)
 endif()
 
 # Inert pixel-seam contract test (docs/bridging.md §3): pins the safe

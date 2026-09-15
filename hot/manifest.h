@@ -22,13 +22,21 @@
 //   MANIFEST_ENSURE()  MANIFEST_REFLECT(...)  MANIFEST_IS_FIRST_RUN()
 //
 // Per-app layout under APPLICATION_DATA + org + <app>:
-//   manifest.json        library catalog {name, version, org, libraries{}}
-//   bin/backward/<lib>   oldest retained set (rollback), per library
-//   bin/previous/<lib>   prior generation (rollback), per library
-//   bin/current/<lib>    the runnable set — what the launcher dlopens
-//   bin/new/<lib>        staged future set (downloads land here)
-//   hot/                 live hot-swap dir — the Mode-1 Hot_poll watch dir
-//   cache/               cache system
+//   manifest.json         library catalog {name, version, org, libraries{}}
+//   bin/backward/<lib>    oldest retained set (rollback), per library
+//   bin/previous/<lib>    prior generation (rollback), per library
+//   bin/current/<lib>     the runnable set — what the launcher dlopens
+//   bin/current/<lib>.generation  per-library generation stamp (N+1 per promote)
+//   bin/new/<lib>         staged future set (downloads land here)
+//   cache/                cache system
+//
+// The <lib>.generation stamp is THE hot-swap trigger: MANIFEST_REFLECT seeds
+// it (1) on first install and MANIFEST_PROMOTE bumps it for every promoted
+// library. The loader (hot/hot.c) compares its last-seen generation against
+// the stamp and reloads bin/current/<lib> when it moves — the rename slide IS
+// the swap, so no watch-dir and no clone step exist (the retired MODE-1
+// hot/ watch dir is gone; see the SPIR-V Shader Deployment-era install docs
+// history for the old design).
 //
 // manifest.json is the plain JSON catalog any runtime may edit (it is the
 // downloader's entry point, not R1's own state). Example:
@@ -51,9 +59,10 @@
 // io.dylib / io.dll / libio.so by platform.
 //
 // Two experiences share this tree: MODE 1 (app RUNNING) swaps dylibs live
-// via Hot_poll while current/ stays pinned; MODE 2 (app CLOSED) promotes
-// new/ → current/ with renames so the next launch is the new binary.
-// See docs/install.md for the full process.
+// via Hot_poll against the bin/current/<lib>.generation stamp (MANIFEST_PROMOTE
+// bumps it; the loader reloads bin/current/<lib> when it moves); MODE 2
+// (app CLOSED) promotes new/ → current/ with renames so the next launch is
+// the new binary. See docs/install.md for the full process.
 
 // --- Hotloading & catalog constants (consumed by hot/ trampolines and this file) ----
 
@@ -145,14 +154,15 @@ bool MANIFEST_LIBRARY(const char *first, ...);
 const char *MANIFEST_ROOT(void);
 
 // Create the whole per-app ladder (bin/{backward,previous,current,new} plus
-// one subfolder per registered library, hot, cache). Idempotent. Returns
+// one subfolder per registered library, cache). Idempotent. Returns
 // true when every dir exists.
 bool MANIFEST_ENSURE(void);
 
 // First-run reflection of one library: seed its section list in manifest.json
 // from the bundled payload at sourceDir, copy the payload into
-// bin/current/<library>, and drop the install fingerprint. Idempotent via the
-// fingerprint in MANIFEST_MARK; returns false on any copy failure.
+// bin/current/<library>, seed the <library>.generation stamp (1), and drop
+// the install fingerprint. Idempotent via the fingerprint in MANIFEST_MARK;
+// returns false on any copy failure.
 bool MANIFEST_REFLECT(const char *library, const char *sourceDir);
 
 // Update staging: verify every top-level entry of payloadDir is a DECLARED
@@ -167,6 +177,8 @@ bool MANIFEST_UPDATE(const char *library, const char *payloadDir);
 // content in bin/new/<library>, slide (renames, same filesystem, atomic):
 //   current → previous → backward   (rollback sets slide, oldest dropped)
 //   new     → current
+// then bump that library's bin/current/<lib>.generation stamp (N+1) — the
+// live re-loader sees the move on its next poll and swaps in-process.
 // Libraries with no staged set stay pinned. Returns false if any rename fails
 // (nothing is half-applied for the failing library).
 bool MANIFEST_PROMOTE(void);
@@ -174,6 +186,12 @@ bool MANIFEST_PROMOTE(void);
 // First-run detection: true when the tree was never installed (no
 // bin/current/<MANIFEST_MARK>). The launcher must MANIFEST_REFLECT before run.
 bool MANIFEST_IS_FIRST_RUN(void);
+
+// Read one library's current generation stamp — bin/current/<lib>.generation.
+// Returns 0 when never mounted, the library key is invalid, or the stamp is
+// missing/unparsable (a never-installed library reads 0). The hot re-loader
+// (hot/hot.c) compares this against its last-seen generation to trigger a swap.
+uint64_t MANIFEST_GENERATION(const char *library);
 
 // --- PATH BUILDERS (dest-last) ----------------------------------------------
 
@@ -193,8 +211,12 @@ bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool cr
 // manifest never mounted.
 bool ManifestPath_libraryDir(ManifestLadder slot, const char *library, char *dest, size_t cap, bool create);
 
-// hot/ and cache/ dirs under the locked root.
-bool ManifestPath_hotDir(char *dest, size_t cap);
+// The per-library generation stamp <locked root>/bin/current/<lib>.generation
+// — a plain base-10 integer (0 when never written). The live re-loader
+// compares this against its last-seen generation to trigger a hot swap.
+bool ManifestPath_generationFile(const char *library, char *dest, size_t cap);
+
+// cache/ dir under the locked root.
 bool ManifestPath_cacheDir(char *dest, size_t cap);
 
 // The catalog file <locked root>/manifest.json (created on first save).

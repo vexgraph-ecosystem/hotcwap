@@ -75,6 +75,7 @@
  * Callbacks & Telemetry:
  *   - Application_onHotReload(self, fn, user)
  *   - Application_setHot(self, hot)    // opt-in hot-reload module
+ *   - Application_pollHot(self)        // generation-driven swap + reload fn
  *
  * Telemetry:
  *   - Application_getFps(self)             // graphvex writes, Application reads
@@ -140,7 +141,7 @@ static bool appAllWindowsClosed(const Application *self) {
     return true;
 }
 
-static void appParkSlice(const Application *self) {
+static void appParkSlice(Application *self) {
     for (uint32_t i = 0; i < APP_PARK_SLICES; i++) {
         if (!atomic_load_explicit(&(*self).running, memory_order_relaxed))
             return;
@@ -222,6 +223,7 @@ void Application_run(Application *self) {
             return;
         }
         appParkSlice(self);
+        Application_pollHot(self); // generation-driven hot swap at ~250ms cadence
     }
 }
 
@@ -251,6 +253,15 @@ void Application_onHotReload(Application *self, AppHotReloadFn fn, void *userdat
     if (!self) return;
     (*self).hotReloadFn = fn;
     (*self).hotReloadUserdata = userdata;
+}
+
+void Application_pollHot(Application *self) {
+    if (!self || !(*self).hot)
+        return;
+    uint32_t loaded = 0;
+    HotResult r = Hot_poll((*self).hot, &loaded);
+    if (r == HOT_OK && loaded > 0 && (*self).hotReloadFn)
+        (*self).hotReloadFn(self, loaded, (*self).hotReloadUserdata);
 }
 
 // TELEMETRY

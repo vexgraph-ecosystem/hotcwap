@@ -73,6 +73,8 @@
  *   static bool   library_declares(const ManifestLibrary *lib, const char *stem);
  *   static ManifestLibrary *catalog_lookup(const char *name);
  *   static ManifestLibrary *catalog_ensure(const char *name);
+ *   static uint64_t generation_read(const char *path);   // base-10, 0 on miss
+ *   static bool   generation_write(const char *path, uint64_t value); // tmp+rename
  *   static bool   json_ws(JsonIn *self);
  *   static bool   json_eat(JsonIn *self, char expect);
  *   static bool   json_peek(JsonIn *self, char *c);
@@ -97,14 +99,14 @@
  *   - MANIFEST_ENSURE()
  *   - MANIFEST_REFLECT(library, sourceDir)
  *   - MANIFEST_UPDATE(library, payloadDir)
- *   - MANIFEST_PROMOTE()
+ *   - MANIFEST_PROMOTE()                     // slide + bump current generations
  *   - MANIFEST_IS_FIRST_RUN()
  * Path Builders:
  *   - ManifestPath_begin(self, kind)
  *   - ManifestPath_push(self, segment, create)
  *   - ManifestPath_ladderDir(slot, dest, cap, create)
  *   - ManifestPath_libraryDir(slot, library, dest, cap, create)
- *   - ManifestPath_hotDir(dest, cap)
+ *   - ManifestPath_generationFile(library, dest, cap)
  *   - ManifestPath_cacheDir(dest, cap)
  *   - ManifestPath_manifestJson(dest, cap)
  * Getters:
@@ -116,9 +118,9 @@
 #define MANIFEST_BUF_CAP 1024
 #define MANIFEST_JSON_CAP 16384
 #define MANIFEST_BIN "bin"
-#define MANIFEST_HOT "hot"
 #define MANIFEST_CACHE "cache"
 #define MANIFEST_JSON "manifest.json"
+#define MANIFEST_GENERATION_EXT ".generation"
 #define MANIFEST_VERSION_DEFAULT "0.1.0"
 #define SLOT_NAMES { "backward", "previous", "current", "new" }
 #define ROTATION_DIR  ".promote_rot"
@@ -175,6 +177,43 @@ static bool file_exists(const char *path) {
     struct stat st;
     memset(&st, 0, sizeof(st));
     return stat(path, &st) == 0 && S_ISREG((unsigned int) st.st_mode);
+}
+
+// Read a base-10 generation stamp. Returns 0 when the file is missing or
+// unparsable (a fresh library is generation 0 → first seed writes 1).
+static uint64_t generation_read(const char *path) {
+    if (path == nullptr || *path == '\0')
+        return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    char buf[32];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    uint64_t v = 0;
+    for (size_t i = 0; i < n && isdigit((unsigned char) buf[i]); i++)
+        v = v * 10 + (uint64_t) (buf[i] - '0');
+    return v;
+}
+
+// Write a base-10 generation stamp via temp-file + rename (atomic enough for
+// the loader's read-one-integer contract — a torn read degrades to a stale
+// generation, which self-heals on the next poll).
+static bool generation_write(const char *path, uint64_t value) {
+    if (path == nullptr || *path == '\0')
+        return false;
+    char tmp[MANIFEST_BUF_CAP];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f)
+        return false;
+    fprintf(f, "%llu\n", (unsigned long long) value);
+    fclose(f);
+    if (!RENAME(tmp, path)) {
+        UNLINK(tmp);
+        return false;
+    }
+    return true;
 }
 
 static bool dir_mkdir(const char *path) {
@@ -867,10 +906,6 @@ bool MANIFEST_ENSURE(void) {
                                          sizeof(path), true))
                 return false;
     }
-    if (!ManifestPath_hotDir(path, sizeof(path)))
-        return false;
-    if (!dir_mkdir(path))
-        return false;
     if (!ManifestPath_cacheDir(path, sizeof(path)))
         return false;
     return dir_mkdir(path);
@@ -931,6 +966,13 @@ bool MANIFEST_REFLECT(const char *library, const char *sourceDir) {
     if (!mkdir_p(currentLib))
         return false;
     if (!copy_tree(sourceDir, currentLib, 0))
+        return false;
+
+    // Seed the generation stamp (1) — the live re-loader's swap trigger.
+    char genFile[MANIFEST_BUF_CAP];
+    if (!ManifestPath_generationFile(library, genFile, sizeof(genFile)))
+        return false;
+    if (generation_read(genFile) == 0 && !generation_write(genFile, 1))
         return false;
 
     if (!dir_mkdir(markDir))
@@ -1016,6 +1058,14 @@ bool MANIFEST_PROMOTE(void) {
             return false;
         if (!RENAME(newDir, curDir))
             return false;
+
+        // The rename slide IS the swap; bump the generation stamp so the live
+        // re-loader (hot/hot.c Hot_poll) sees the move and reloads current/.
+        char genFile[MANIFEST_BUF_CAP];
+        if (!ManifestPath_generationFile(name, genFile, sizeof(genFile)))
+            return false;
+        if (!generation_write(genFile, generation_read(genFile) + 1))
+            return false;
     }
     return true;
 }
@@ -1030,6 +1080,15 @@ bool MANIFEST_IS_FIRST_RUN(void) {
         return true;
     snprintf(markDir, sizeof(markDir), "%s/%s", current, MANIFEST_MARK);
     return !dir_exists(markDir);
+}
+
+uint64_t MANIFEST_GENERATION(const char *library) {
+    if (!g_mounted || !valid_name(library))
+        return 0;
+    char genFile[MANIFEST_BUF_CAP];
+    if (!ManifestPath_generationFile(library, genFile, sizeof(genFile)))
+        return 0;
+    return generation_read(genFile);
 }
 
 // --- path builders -----------------------------------------------------------
@@ -1105,21 +1164,23 @@ bool ManifestPath_libraryDir(ManifestLadder slot, const char *library, char *des
     return ManifestPath_push(&p, library, create);
 }
 
-bool ManifestPath_hotDir(char *dest, size_t cap) {
+bool ManifestPath_generationFile(const char *library, char *dest, size_t cap) {
     if (dest == nullptr || cap == 0)
         return false;
     if (!g_mounted)
         return false;
-    size_t root_len = strlen(g_root);
-    if (root_len + 1 + strlen(MANIFEST_HOT) + 1 > cap)
+    if (!valid_name(library))
         return false;
-    memcpy(dest, g_root, root_len);
-    dest[root_len] = '\0';
-    ManifestPath p;
-    p.buf = dest;
-    p.cap = cap;
-    p.len = root_len;
-    return ManifestPath_push(&p, MANIFEST_HOT, false);
+    // Sibling of the current/<lib> dir (bin/current/<lib>.generation): sits
+    // OUTSIDE the rotated subfolders so the ladder rename slide never sweeps it.
+    char slotDir[MANIFEST_BUF_CAP];
+    if (!ManifestPath_ladderDir(MANIFEST_LADDER_CURRENT, slotDir, sizeof(slotDir), false))
+        return false;
+    size_t n = strlen(slotDir) + 1 + strlen(library) + strlen(MANIFEST_GENERATION_EXT) + 1;
+    if (n > cap)
+        return false;
+    snprintf(dest, cap, "%s/%s%s", slotDir, library, MANIFEST_GENERATION_EXT);
+    return true;
 }
 
 bool ManifestPath_cacheDir(char *dest, size_t cap) {

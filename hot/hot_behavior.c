@@ -40,6 +40,7 @@
  *   - Hot_restore(buf, len)
  *   - Hot_migrate(oldVersion, oldBuf, oldLen, newBuf, newCap, outLen)
  *   - Hot_manifest(void)
+ *   - VkModuleGetTrampolines(outCount)   : loader-ABI trampoline table export
  *   - hot_behavior_pulse(nowSeconds)
  *   - hot_behavior_bar(w, h, pulse, outBarH, outBarW)
  *   - hot_texture_path(void)
@@ -120,13 +121,43 @@ const char *Hot_manifest(void) {
         "\"type_ids\": [{\"name\": \"BehaviorState\", \"value\": 2}], "
         "\"exports\": [\"hot_behavior_pulse\", \"hot_behavior_bar\", "
         "\"hot_texture_path\", \"Hot_init_module\", \"Hot_shutdown_module\", "
-        "\"Hot_save\", \"Hot_restore\", \"Hot_migrate\"], "
+        "\"Hot_save\", \"Hot_restore\", \"Hot_migrate\", "
+        "\"VkModuleGetTrampolines\"], "
         "\"dependencies\": []}";
+}
+
+// LOADER ABI EXPORT — the trampoline table the manifest loader (hot/hot.c)
+// adopts on dlopen. Row layout MUST match hot.c's contract:
+//   { const char *name; void *fn; } entries[], count via VkModuleGetTrampolines.
+typedef struct HotModuleExport {
+    const char *name;
+    void *fn;
+} HotModuleExport;
+
+float hot_behavior_pulse(double nowSeconds);
+void hot_behavior_bar(float w, float h, float pulse, float *outBarH, float *outBarW);
+const char *hot_texture_path(void);
+
+static const HotModuleExport s_exports[] = {
+    { "hot_behavior_pulse",    (void*) hot_behavior_pulse },
+    { "hot_behavior_bar",      (void*) hot_behavior_bar },
+    { "hot_texture_path",      (void*) hot_texture_path },
+    { "Hot_init_module",       (void*) Hot_init_module },
+    { "Hot_shutdown_module",   (void*) Hot_shutdown_module },
+    { "Hot_save",              (void*) Hot_save },
+    { "Hot_restore",           (void*) Hot_restore },
+    { "Hot_migrate",           (void*) Hot_migrate },
+};
+
+const void *VkModuleGetTrampolines(uint32_t *outCount) {
+    if (outCount)
+        (*outCount) = (uint32_t) (sizeof(s_exports) / sizeof(s_exports[0]));
+    return s_exports;
 }
 
 float hot_behavior_pulse(double nowSeconds) {
     double t = nowSeconds + (double) s_phaseBias;
-    float base = 0.5f + 0.5f * sinf((float)(t * 6.28318530718));
+    float base = 0.5f + 0.5f * sinf((float) (t * 6.28318530718));
     return base * s_glowStrength > 1.0f ? 1.0f : base * s_glowStrength;
 }
 

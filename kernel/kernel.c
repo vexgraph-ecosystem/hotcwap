@@ -457,7 +457,10 @@ int Kernel_runAll(Kernel *self) {
         if ((pass % 50) == 0) {
             for (uint32_t i = 0; i < (*self).applicationCount; i++) {
                 Application *a = (*self).applications[i];
-                if (a && Application_isFinished(a))
+                if (!a)
+                    continue;
+                Application_pollHot(a); // generation-driven hot swap, ~250ms
+                if (Application_isFinished(a))
                     Application_stop(a);
             }
         }

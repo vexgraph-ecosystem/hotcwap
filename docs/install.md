@@ -102,17 +102,19 @@ no-op.
 │   │   └── <library>/      ← ONE generation set PER library
 │   ├── previous/           ← prior generation (rollback), per library
 │   ├── current/            ← the runnable set — what the launcher dlopens
-│   │   └── <library>/ ...
+│   │   ├── <library>/ ...
+│   │   └── <library>.generation  ← per-library stamp (N+1 per promote)
 │   └── new/                ← staged future set (downloads land here)
-├── hot/                    ← MODE-1 watch dir: Hot_poll watches here for dylibs
 └── cache/                  ← cache system
 ```
 
 Slot paths via `ManifestPath_ladderDir(slot, dest, cap, create)`; the
 per-library path is `ManifestPath_libraryDir(slot, library, dest, cap,
 create)` (validates the library name against a path-safe charset).
-`ManifestPath_hotDir`, `ManifestPath_cacheDir` and
-`ManifestPath_manifestJson` resolve the other three.
+`ManifestPath_generationFile`, `ManifestPath_cacheDir` and
+`ManifestPath_manifestJson` resolve the other three. There is no `hot/`
+watch dir anymore — the `<library>.generation` stamp is the swap trigger
+(the harnessed MODE-1 design from the pre-manifest era is retired).
 
 ## 5. First-run reflection (`MANIFEST_IS_FIRST_RUN` / `MANIFEST_REFLECT`)
 
@@ -146,9 +148,22 @@ WHOLE update — never a partial stage. The older `HotStage_verify` (JSON
 
 ### MODE 1 — HOT SWAP (app running)
 
-Beyond the ladder, MODE 1 is `hot/hot.c`'s in-place pipeline:
-`clone → dlopen → trampoline swap → retire ring (4-poll grace)`. Modules
-expose exports via the struct contract (`VkModuleGetTrampolines`); the
+Beyond the ladder, MODE 1 is `hot/hot.c`'s dual-poll pipeline:
+`stamp check → off-thread state save → dlopen + fail-closed verify →
+trampoline swap → state restore → retire ring (4-poll grace)`. Each poll
+compares `MANIFEST_GENERATION(<library>)` (reads
+`bin/current/<library>.generation`) against the last-seen generation:
+
+1. On a stamp move, the poll kicks a save worker (25ms cond-wait slices, the
+   Bounded Wait Law) that snapshots the current images' module state via
+   `Hot_save` and returns `loaded==0` — hot loops never pay serialization.
+2. The next poll dlopens EVERY section of the new current set and verifies
+   the whole library fail-closed (`dlopen` + `VkModuleGetTrampolines` on each
+   before any commit), atomically swaps the trampoline table, restores the
+   saved blobs into the fresh images, and retires the old handles into the
+   grace ring.
+
+Modules expose exports via the struct contract (`VkModuleGetTrampolines`); the
 retired JSON `Hot_manifest` ABI gate is gone — the ladder placement is the
 gate. Zero restart, `current/` stays pinned during the swap.
 
