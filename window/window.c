@@ -10,6 +10,8 @@
 // ShowWindow / SetWindowTextA / SetWindowPos / SetWindowDisplayAffinity,
 // and a GetMessage/PeekMessage-TranslateMessage-DispatchMessage event loop.
 
+#include <stdio.h>
+
 #include "window/window.h"
 #include "annotation/draft.h"
 #include "annotation/incomplete.h"
@@ -45,10 +47,10 @@
  *   - Window_center(window)
  *   - Window_show(window)
  *   - Window_hide(window)
-  *   - Window_attachPanes(window, panel, width, height)
-  *   - Window_resizePanes(window, panel, width, height)
-  *   - Window_compositePanes(window, contentPanel)
-  *   - Window_compositeBoards(window)
+ *   - Window_attachPanes(window, panel, width, height)
+ *   - Window_resizePanes(window, panel, width, height)
+ *   - Window_compositePanes(window, contentPanel)
+ *   - Window_compositeBoards(window)
  *   - Window_renderGeneration(window)
  *   - Window_bringToFront(window)
  *   - Window_minimize(window)
@@ -86,6 +88,8 @@
  *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)
  *   - Window_setUndecorated(window, type)
+  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stderr stub
+  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)  : macOS-only stderr stub
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
@@ -115,6 +119,8 @@
  *   - Window_isResizable(window)
  *   - Window_isClosable(window)
  *   - Window_isMiniaturizable(window)
+ *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stderr stub
+ *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)  : macOS-only stderr stub
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
  *   - Window_isFocused(window)
@@ -301,6 +307,40 @@ void Window_setFullscreenButton(Window *window, bool enabled) {
 void Window_setUndecorated(Window *window, int mode) {
     (void) window;
     (void) mode;
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32: needs a Mac to mean anything.
+void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLight light, bool visible) {
+    (void) window;
+    (void) light;
+    (void) visible;
+    fprintf(stderr, "window: Window_macOS_setTrafficLightButtonVisible is macOS-only (needs a Mac machine)\n");
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTrafficLight light) {
+    (void) window;
+    (void) light;
+    fprintf(stderr, "window: Window_macOS_isTrafficLightButtonVisible is macOS-only (needs a Mac machine)\n");
+    return false;
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y) {
+    (void) window;
+    (void) x;
+    (void) y;
+    fprintf(stderr, "window: Window_macOS_setTrafficLightHeaderPosition is macOS-only (needs a Mac machine)\n");
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY) {
+    (void) window;
+    fprintf(stderr, "window: Window_macOS_getTrafficLightHeaderPosition is macOS-only (needs a Mac machine)\n");
+    if (outX)
+        *outX = 0.0f;
+    if (outY)
+        *outY = 0.0f;
 }
 
 ;;INCOMPLETE // ShowWindow(SW_MINIMIZE); no-op until implemented.

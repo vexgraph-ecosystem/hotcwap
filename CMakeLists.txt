@@ -29,7 +29,9 @@ if(NOT TARGET hotcwap)
 # graphvex. hotcwap keeps only the Window seam glue (vk_loader.c bridges
 # kernel.c <-> graphvex's Vk_* API).
 add_library(hotcwap STATIC
-    app/application.c
+    process/application.c
+    process/process.c
+    process/console.c
     kernel/kernel.c
     hot/hot.c
     hot/hot_trampoline.c
@@ -38,6 +40,7 @@ add_library(hotcwap STATIC
     hot/vk_loader.c
     hot/spv_watch.c
     hot/stage.c
+    window/window_event.c
 )
 target_include_directories(hotcwap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(hotcwap PRIVATE -Wall -Wextra -Werror)
@@ -122,18 +125,18 @@ if(TARGET graphvex)
     target_link_libraries(hotcwap PUBLIC graphvex)
 endif()
 
-# OS window backend: Cocoa shim on macOS, platform stubs elsewhere.
+# OS window backend: the fresh AppKit window backend on macOS (pure AppKit,
+# zero Vulkan/Metal — a window with bridges per the Window Decoupling Law),
+# platform stubs elsewhere.
 if(APPLE)
     target_sources(hotcwap PRIVATE
-        objc/window_cocoa.m
+            window/window_cocoa.m
     )
-    set_source_files_properties(objc/window_cocoa.m PROPERTIES
+    set_source_files_properties(window/window_cocoa.m PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(hotcwap PUBLIC
         "-framework Cocoa"
         "-framework AppKit"
-        "-framework QuartzCore"
-        "-framework Metal"
     )
 elseif(WIN32)
     target_sources(hotcwap PRIVATE window/window.c)
@@ -166,4 +169,16 @@ if(NOT TARGET window_test AND EXISTS "${HOTCWAP_TEST_DIR}/window_test.c")
     target_include_directories(window_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(window_test PRIVATE hotcwap)
     target_compile_options(window_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
+# Headless WindowEvent registry test: symmetric get/set + fire dispatch + the
+# single vetoable quit slot. Never touches the OS window backend, so it runs
+# on every platform with zero surfaces.
+if(NOT TARGET window_event_test AND EXISTS "${HOTCWAP_TEST_DIR}/window_event_test.c")
+    add_executable(window_event_test
+        ${HOTCWAP_TEST_DIR}/window_event_test.c
+    )
+    target_include_directories(window_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(window_event_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(window_event_test PRIVATE hotcwap)
 endif()

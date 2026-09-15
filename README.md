@@ -13,10 +13,10 @@ In conventional game architectures, window management and simulation loops are t
 ## Key Architecture & Strengths
 
 * **OS Window Decoupling**: Thread 0 hosts the native platform window (`AppKit` / Cocoa on macOS; X11/Wayland on Linux). The display link, event pump, and surface layer persist indefinitely across module reloads.
-* **Vulkan CAMetalLayer Bridge**: Directly connects native Cocoa windows to MoltenVK / Vulkan swapchains via hardware-accelerated `CAMetalLayer` surfaces (`objc/window_cocoa.m`).
+* **Decoupled Window Backend**: A window is a dumb surface + callback bridge (`window/window_cocoa.m`) — pure AppKit, zero Vulkan/Metal. It answers `Window_*` calls from graphvex and R5 apps through the per-window `WindowEvent` lifecycle registry; the GPU-era composite/attach surface is retained as `;;INTENTION` stubs until the darling compositor migrates onto the bridge (the Window Decoupling Law).
 * **Microsecond Dynamic Reloader**: Monitors file manifests and filesystem timestamps (`hot/manifest.c`, `hot/hot.c`) to detect newly built dynamic libraries (`.dylib`), swap function pointer dispatch tables, and rebind entry points with zero frame interruption.
 * **Vulkan GPA Loader**: Integrated `vkGetInstanceProcAddr` dynamic loader (`hot/vk_loader.c`) that extracts Vulkan symbols dynamically without requiring hard linkage to external loader stubs.
-* **Ultra-Low Latency Event Pump**: Decoupled polling for keyboard, mouse, and touch events at 1000Hz resolution.
+* **Low-Latency Event Pump**: Decoupled polling for keyboard, mouse, and touch in bounded 25ms slices (the Bounded Wait Law), mirrored into the vexspoke input rings per-window.
 
 ---
 
@@ -87,10 +87,10 @@ target_link_libraries(my_app PRIVATE hotcwap)
 ## What's in this repo
 
 * **`kernel/kernel.h/.c`** — R0 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
-* **`app/application.h/.c`** — Executable identity + window registry: `Application {CLI/TUI/GUI}` with `windows[APP_MAX_WINDOWS]`. Final infrastructure engines rely on, never reverse.
+* **`process/`** — Process taxonomy: `process` (one-shot invocable), `application` (executable identity + window registry + hot-module slot), `console` (tty/session pump).
 * **`window/window.h/.c`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
+* **`window/window_cocoa.m`** — Native macOS AppKit backend (pure AppKit, zero Vulkan/Metal): window lifecycle, event pump, chrome, traffic-light API, per-window `WindowEvent` registry.
 * **`window/window_linux.c`** — Linux X11/Wayland display backend.
-* **`objc/window_cocoa.m`** — Native macOS AppKit implementation: `NSWindow`, `NSView`, and `CAMetalLayer` creation with Retina backing scale handling, subpixel event mapping, live-resize/zoom-to-fill orchestration, and native macOS desktop Spaces fullscreen lifecycle.
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — Dynamic file manifest tracker and change detector.
 * **`hot/vk_loader.c`** — Dynamic MoltenVK/Vulkan symbol loader and GPA function table generator.

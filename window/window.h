@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "annotation/platform_exclusive.h"
+
 #include "event/keyhandler.h"
 #include "event/mousehandler.h"
 #include "event/touchhandler.h"
@@ -36,8 +38,10 @@
 
 // Opaque handle; contents live in the backend file. The tag stays INCOMPLETE
 // here on purpose (exception to preferences rule 3): the backend translation
-// unit completes struct Window with its real fields.
-typedef struct Window Window;
+// unit completes struct Window with its real fields. The struct Window forward
+// typedef and the per-window lifecycle registry (WindowEvent) are owned by
+// window/window_event.h (the Single Class Per File Law).
+#include "window/window_event.h"
 
 typedef struct Panel Panel;
 
@@ -58,9 +62,10 @@ typedef struct WindowDesc {
     const char *title;   // default "vex"
     int width;           // default 800
     int height;          // default 600
-    int x;               // top-left, default 0
-    int y;               // default 0
-    bool centered;       // default false
+    int x;               // top-left, default 0 (only honored when non-zero)
+    int y;               // default 0 (only honored when non-zero)
+    bool centered;       // default true — the window lands centered on the main
+                         // screen's visible frame; only a non-zero x/y defeats it
     bool shown;          // default false — construct hidden, show() when ready
 } WindowDesc;
 
@@ -72,6 +77,8 @@ typedef struct WindowDesc {
 //   Window_new(&(WindowDesc){…}) -> every other field (x/y/centered/shown)
 //
 // All variants construct HIDDEN: construct -> mutate -> Window_show().
+// Placement defaults to centered on the main screen's visible frame (like an
+// application should be); pass .x/.y in WindowDesc for a custom placement.
 // The macro is function-like, so it never fires when `Window` is used as the
 // type name — only at call sites with parentheses.
 
@@ -135,6 +142,10 @@ void Window_setVisible(Window *window, bool visible);
 // Two-layer split architecture:
 //   - contentPanel: the UI tree (board-backed, child panes composited by AppKit)
 //   - scenePanel: the scene tree (Vulkan swapchain-backed)
+// DECOUPLING LAW: a window with NEITHER panel attached is a bare AppKit window.
+// Vulkan is not booted, no swapchain is created, and no present worker runs —
+// the window resizes natively and draws nothing. Vulkan comes online (per
+// Kernel_runAll) only once a contentPanel or scenePanel is attached.
 
 void   Window_setContainer(Window *window, Panel *root);
 Panel *Window_getContainer(const Window *window);
@@ -146,6 +157,24 @@ Panel *Window_getContentPanel(const Window *window);
 // Set the scene panel (the Vulkan-rendered scene tree stamped on the swapchain).
 void   Window_setScenePanel(Window *window, Panel *panel);
 Panel *Window_getScenePanel(const Window *window);
+
+// --- Graphics boards: opaque platform layers owned by graphvex -------------
+//
+// The decoupled stack (the Window Decoupling Law): the window shim owns PARENTING ONLY, the
+// graphics shim (graphvex GraphicsLayer) owns CONTENT ONLY (device,
+// drawableSize, swapchain). Both slots are void*: the window stores them,
+// parents them, and orders them — never dereferences them, never creates
+// them. nullptr = board absent (bare window: pure AppKit, zero GPU).
+//   - bottomLayer: scene board (3D viewport) — parents above the blur view.
+//   - topLayer: content board (UI canvas) — parents above the scene board.
+// Stack bottom-to-top: NSWindow -> blur -> bottomLayer -> topLayer.
+void   Window_setBottomLayer(Window *window, void *layer);
+void  *Window_getBottomLayer(const Window *window);
+void   Window_setTopLayer(Window *window, void *layer);
+void  *Window_getTopLayer(const Window *window);
+// Re-assert stack order (blur back, bottom, top front). Thread 0 only;
+// off-thread callers are bounced to the main queue asynchronously.
+void   Window_orderLayers(Window *window);
 
 // --- Metal pane bridge (C callable from renderer) ------------------------
 //
@@ -224,9 +253,39 @@ void Window_setFullscreenButton(Window *window, bool enabled);
 void Window_setUndecorated(Window *window, int type);
 void Window_setFloatingTrafficLights(Window *window, bool floating); // Transparent titlebar, leaves just traffic lights over content
 
+// macOS-only traffic-light chrome (the Window_macOS_ infix IS the platform
+// lock: these symbols exist only in the Cocoa backend; a non-Apple build that
+// calls them fails to link, which is the flag). The lights live only in Titled
+// chrome; under NAKED (FullSizeContentView) they float over content at the
+// native top-left inset. Per-button visibility hides e.g. the yellows (keeping
+// only red) or drops all three while still NAKED; the header position re-seats
+// the cluster for a custom header — (x, y) is the desired top-left origin of
+// the red button in content-view points from the content top-left. All public
+// AppKit (standardWindowButton: + setHidden:/setFrameOrigin:), no private API.
+typedef enum WindowTrafficLight {
+    WINDOW_TRAFFIC_LIGHT_CLOSE = 0,    // red
+    WINDOW_TRAFFIC_LIGHT_MINIMIZE = 1, // yellow
+    WINDOW_TRAFFIC_LIGHT_ZOOM = 2      // green
+} WindowTrafficLight;
+#define WINDOW_TRAFFIC_LIGHT_RED WINDOW_TRAFFIC_LIGHT_CLOSE
+#define WINDOW_TRAFFIC_LIGHT_YELLOW WINDOW_TRAFFIC_LIGHT_MINIMIZE
+#define WINDOW_TRAFFIC_LIGHT_GREEN WINDOW_TRAFFIC_LIGHT_ZOOM
+;;PLATFORM_EXCLUSIVE("macOS")
+void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLight light, bool visible);
+;;PLATFORM_EXCLUSIVE("macOS")
+bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTrafficLight light);
+;;PLATFORM_EXCLUSIVE("macOS")
+void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y);
+;;PLATFORM_EXCLUSIVE("macOS")
+void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY);
+
 void Window_setOpacity(Window *window, float opacity); // 0.0 to 1.0
 void Window_setTransparentBackground(Window *window, bool transparent); // Makes the window backdrop fully clear so Vulkan can draw holes
-void Window_setBlur(Window *window, float blur);       // 0.0 to 1.0 (adds frosted glass behind content)
+// 0.0 to 1.0 (adds frosted glass behind content). Rejected with a console
+// warning while chrome is DECORATED — blur requires NAKED or BORDERLESS chrome
+// (frosted glass under an opaque titlebar is a defect). Switching chrome back
+// to DECORATED strips any active blur.
+void Window_setBlur(Window *window, float blur);
 void Window_setAlwaysOnTop(Window *window, bool onTop);
 void Window_setClickThrough(Window *window, bool clickThrough);
 void Window_setShadow(Window *window, bool shadow);
@@ -282,6 +341,16 @@ void *Window_contentView(Window *window);
 void *Window_metalLayer(Window *window);
 void Window_setGravityTopLeft(Window *window);
 
+// Worker present transaction: explicit CoreAnimation commit per board+pane
+// present walk (Vk_clearPresent + VkPane_presentAll). The present worker
+// owns no runloop, so its implicit transaction never commits at idle and
+// every presentsWithTransaction=YES drawable would stall behind it —
+// Begin/End release YES-presents on worker cadence. Apple-only (impl in
+// objc/window_cocoa.m, like Window_metalLayer); call from the present
+// worker only, guarded by #ifdef __APPLE__ at the call site.
+void Window_workerPresentBegin(void);
+void Window_workerPresentEnd(void);
+
 // --- Software frame presentation ---
 //
 // Stamp an RGBA raster (ColorBuffer layout) into the window's content view,
@@ -298,30 +367,18 @@ bool Window_present(Window *window, const Buffer *frame);
 // delivered it to, so an attached adapter only hears events for ITS window
 // (broadcast-tagged synthetic events reach every window). Removal is by
 // pointer identity. Destroying the window detaches its listeners.
+//
+// The OS lifecycle contract (resize/fullscreen/minimize/restore/press/focus/
+// quit/zoom) is the WindowEvent class in window/window_event.h — ONE embedded
+// per window, fired by the pump pass on Thread 0. It supersedes the former
+// WindowEvent adapter list and Window_addWindowAdapter (retired; the old
+// adapter struct was macOS-only and lived in the retired Cocoa shim).
 void Window_addKeyAdapter(Window *window, const KeyHandler *adapter);
 bool Window_removeKeyAdapter(Window *window, const KeyHandler *adapter);
 void Window_addMouseAdapter(Window *window, const MouseHandler *adapter);
 bool Window_removeMouseAdapter(Window *window, const MouseHandler *adapter);
 void Window_addTouchAdapter(Window *window, const TouchHandler *adapter);
 bool Window_removeTouchAdapter(Window *window, const TouchHandler *adapter);
-
-// Window-lifecycle adapter: close requests, focus flips, resize/move moves,
-// monitor hand-offs. Fired from the pump pass on thread 0, AFTER the OS
-// event is processed.
-typedef struct WindowEvent {
-    void *self;
-    void (*onCloseRequested)(void *self, Window *window);
-    void (*onFocusChanged)(void *self, Window *window, bool focused);
-    void (*onResized)(void *self, Window *window, int width, int height);
-    void (*onMoved)(void *self, Window *window, int x, int y);
-    // oldId or newId is 0 when the window leaves/joins the mapped set
-    // (headless boot, screen unplugged with no successor).
-    void (*onMonitorChanged)(void *self, Window *window,
-                             uint32_t oldMonitorId, uint32_t newMonitorId);
-} WindowEvent;
-
-void Window_addWindowAdapter(Window *window, const WindowEvent *adapter);
-bool Window_removeWindowAdapter(Window *window, const WindowEvent *adapter);
 
 // The running: drain all three device rings into the registered adapters.
 // Call ONCE per frame from the game loop, after Window_pollEvents(). If you

@@ -10,6 +10,8 @@
 // XMapWindow / XUnmapWindow / XStoreName / XResizeWindow / XMoveWindow /
 // XDestroyWindow, and an XPending/XNextEvent event loop.
 
+#include <stdio.h>
+
 #include "window/window.h"
 #include "annotation/draft.h"
 #include "annotation/incomplete.h"
@@ -57,6 +59,8 @@
  *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)
  *   - Window_setUndecorated(window, mode)
+  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stderr stub
+  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)  : macOS-only stderr stub
  *   - Window_setFullscreen(window, fullscreen)
  *   - Window_setDRM(window, enabled)
  *   - Window_setMinSize(window, width, height)
@@ -73,6 +77,8 @@
  *   - Window_isResizable(window)
  *   - Window_isClosable(window)
  *   - Window_isMiniaturizable(window)
+ *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stderr stub
+ *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)  : macOS-only stderr stub
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
  * ============================================================================
@@ -256,6 +262,40 @@ void Window_setFullscreenButton(Window *window, bool enabled) {
 void Window_setUndecorated(Window *window, int mode) {
     (void) window;
     (void) mode;
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on X11: needs a Mac to mean anything.
+void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLight light, bool visible) {
+    (void) window;
+    (void) light;
+    (void) visible;
+    fprintf(stderr, "window: Window_macOS_setTrafficLightButtonVisible is macOS-only (needs a Mac machine)\n");
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on X11.
+bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTrafficLight light) {
+    (void) window;
+    (void) light;
+    fprintf(stderr, "window: Window_macOS_isTrafficLightButtonVisible is macOS-only (needs a Mac machine)\n");
+    return false;
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on X11.
+void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y) {
+    (void) window;
+    (void) x;
+    (void) y;
+    fprintf(stderr, "window: Window_macOS_setTrafficLightHeaderPosition is macOS-only (needs a Mac machine)\n");
+}
+
+;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on X11.
+void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY) {
+    (void) window;
+    fprintf(stderr, "window: Window_macOS_getTrafficLightHeaderPosition is macOS-only (needs a Mac machine)\n");
+    if (outX)
+        *outX = 0.0f;
+    if (outY)
+        *outY = 0.0f;
 }
 
 ;;INCOMPLETE // XIconifyWindow; no-op until implemented.
