@@ -34,9 +34,10 @@
  *   WindowNoArgFn onMinimized;              // minimized
  *   WindowNoArgFn onRestored;               // back to normal
  *   WindowNoArgFn onPressed;                // mouse pressed on the window
- *   WindowNoArgFn onFocusGained;            // key window became THIS window
- *   WindowNoArgFn onFocusLost;              // key window left THIS window
- *   WindowNoArgFn onZoomFilled;             // double-click header zoom-to-fill
+  *   WindowNoArgFn onFocusGained;            // key window became THIS window
+  *   WindowNoArgFn onFocusLost;              // key window left THIS window
+  *   WindowNoArgFn onZoomFilled;             // double-click header zoom-to-fill
+  *   WindowOcclusionFn onOcclusionChanged;   // occlusion flipped (visible flag)
  *
  * PRIVATE HELPERS: None.  (WindowQuitRequestedFn / WindowResizedFn /
  * WindowNoArgFn are function-pointer typedefs, not classes.)
@@ -53,9 +54,10 @@
  *   - WindowEvent_fireMinimized(self, window)
  *   - WindowEvent_fireRestored(self, window)
  *   - WindowEvent_firePressed(self, window)
- *   - WindowEvent_fireFocusGained(self, window)
- *   - WindowEvent_fireFocusLost(self, window)
- *   - WindowEvent_fireZoomFilled(self, window)
+  *   - WindowEvent_fireFocusGained(self, window)
+  *   - WindowEvent_fireFocusLost(self, window)
+  *   - WindowEvent_fireZoomFilled(self, window)
+  *   - WindowEvent_fireOcclusionChanged(self, window, visible)
  *
  * Setters:
  *   - WindowEvent_setSelf(self, owner)
@@ -65,9 +67,10 @@
  *   - WindowEvent_setOnMinimized(self, fn)
  *   - WindowEvent_setOnRestored(self, fn)
  *   - WindowEvent_setOnPressed(self, fn)
- *   - WindowEvent_setOnFocusGained(self, fn)
- *   - WindowEvent_setOnFocusLost(self, fn)
- *   - WindowEvent_setOnZoomFilled(self, fn)
+  *   - WindowEvent_setOnFocusGained(self, fn)
+  *   - WindowEvent_setOnFocusLost(self, fn)
+  *   - WindowEvent_setOnZoomFilled(self, fn)
+  *   - WindowEvent_setOnOcclusionChanged(self, fn)
  *
  * Getters:
  *   - WindowEvent_getSelf(self)
@@ -77,9 +80,10 @@
  *   - WindowEvent_getOnMinimized(self)
  *   - WindowEvent_getOnRestored(self)
  *   - WindowEvent_getOnPressed(self)
- *   - WindowEvent_getOnFocusGained(self)
- *   - WindowEvent_getOnFocusLost(self)
- *   - WindowEvent_getOnZoomFilled(self)
+  *   - WindowEvent_getOnFocusGained(self)
+  *   - WindowEvent_getOnFocusLost(self)
+  *   - WindowEvent_getOnZoomFilled(self)
+  *   - WindowEvent_getOnOcclusionChanged(self)
  * ============================================================================
  */
 
@@ -97,6 +101,7 @@ bool WindowEvent_init(WindowEvent *self) {
     (*self).onFocusGained = nullptr;
     (*self).onFocusLost = nullptr;
     (*self).onZoomFilled = nullptr;
+    (*self).onOcclusionChanged = nullptr;
     return true;
 }
 
@@ -173,6 +178,14 @@ void WindowEvent_fireZoomFilled(WindowEvent *self, Window *window) {
     (*self).onZoomFilled((*self).self, window);
 }
 
+void WindowEvent_fireOcclusionChanged(WindowEvent *self, Window *window, bool visible) {
+    if(self == nullptr)
+        return;
+    if((*self).onOcclusionChanged == nullptr)
+        return;
+    (*self).onOcclusionChanged((*self).self, window, visible);
+}
+
 // SETTERS
 void WindowEvent_setSelf(WindowEvent *self, void *owner) {
     if(self == nullptr)
@@ -234,6 +247,12 @@ void WindowEvent_setOnZoomFilled(WindowEvent *self, WindowNoArgFn fn) {
     (*self).onZoomFilled = fn;
 }
 
+void WindowEvent_setOnOcclusionChanged(WindowEvent *self, WindowOcclusionFn fn) {
+    if(self == nullptr)
+        return;
+    (*self).onOcclusionChanged = fn;
+}
+
 // GETTERS
 void *WindowEvent_getSelf(const WindowEvent *self) {
     if(self == nullptr)
@@ -293,4 +312,10 @@ WindowNoArgFn WindowEvent_getOnZoomFilled(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
     return (*self).onZoomFilled;
+}
+
+WindowOcclusionFn WindowEvent_getOnOcclusionChanged(const WindowEvent *self) {
+    if(self == nullptr)
+        return nullptr;
+    return (*self).onOcclusionChanged;
 }

@@ -36,6 +36,7 @@ typedef struct Window Window;
 typedef bool (*WindowQuitRequestedFn)(void *self, Window *window);
 typedef void (*WindowResizedFn)(void *self, Window *window, int width, int height);
 typedef void (*WindowNoArgFn)(void *self, Window *window);
+typedef void (*WindowOcclusionFn)(void *self, Window *window, bool visible);
 
 typedef struct WindowEvent {
     void *self;                               // opaque owner of every slot
@@ -45,9 +46,10 @@ typedef struct WindowEvent {
     WindowNoArgFn onMinimized;                // minimized
     WindowNoArgFn onRestored;                 // back to normal (exit fullscreen / unminimize)
     WindowNoArgFn onPressed;                  // mouse pressed on the window surface
-    WindowNoArgFn onFocusGained;              // key window became THIS window
-    WindowNoArgFn onFocusLost;                // key window left THIS window
-    WindowNoArgFn onZoomFilled;               // double-click header zoom-to-fill
+    WindowNoArgFn onFocusGained;            // key window became THIS window
+    WindowNoArgFn onFocusLost;              // key window left THIS window
+    WindowNoArgFn onZoomFilled;             // double-click header zoom-to-fill
+    WindowOcclusionFn onOcclusionChanged;   // occlusion flipped (true = pixels visible)
 } WindowEvent;
 
 // --- Constructors ---
@@ -66,6 +68,7 @@ void WindowEvent_firePressed(WindowEvent *self, Window *window);
 void WindowEvent_fireFocusGained(WindowEvent *self, Window *window);
 void WindowEvent_fireFocusLost(WindowEvent *self, Window *window);
 void WindowEvent_fireZoomFilled(WindowEvent *self, Window *window);
+void WindowEvent_fireOcclusionChanged(WindowEvent *self, Window *window, bool visible);
 
 // --- Setters / Getters (the Symmetric Getter/Setter Completeness Law) ---
 // Null-safe: setters no-op on null self/fn, getters return NULL.
@@ -98,5 +101,8 @@ WindowNoArgFn WindowEvent_getOnFocusLost(const WindowEvent *self);
 
 void    WindowEvent_setOnZoomFilled(WindowEvent *self, WindowNoArgFn fn);
 WindowNoArgFn WindowEvent_getOnZoomFilled(const WindowEvent *self);
+
+void    WindowEvent_setOnOcclusionChanged(WindowEvent *self, WindowOcclusionFn fn);
+WindowOcclusionFn WindowEvent_getOnOcclusionChanged(const WindowEvent *self);
 
 #endif

@@ -177,10 +177,11 @@
  *   - Window_isFullscreen(window)
  *   - Window_getCursorType(window)
  *   - Window_removeKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
- *   - Window_id(window)
- *   - Window_isFocused(window)
- *   - Window_getMonitorId(window)
- *   - Window_sizeGeneration(window)
+  *   - Window_id(window)
+  *   - Window_isFocused(window)
+  *   - Window_getLifecycle(window)
+  *   - Window_getMonitorId(window)
+  *   - Window_sizeGeneration(window)
  * ============================================================================
  */
 ;;INTENTION("GPU-era composite surface (attachPanes/resizePanes/compositePanes/compositeBoards/orderLayers/metalLayer/setGravityTopLeft/workerPresentBegin/workerPresentEnd/present) is retained as inert stubs so the still-unmigrated darling compositor keeps linking; zero Vulkan/Metal code lives in this file. They retire together with their window.h declarations once darling migrates onto the WindowEvent bridge (the Window Decoupling Law).")
@@ -513,6 +514,21 @@ static void windowRefreshSize(Window *window);
     if (w)
         WindowEvent_fireZoomFilled(&(*w).lifecycle, w);
     return YES;
+}
+
+// Occlusion flip (buried under windows / minimized / hidden Space / ordered
+// out): publish the lifecycle event with current visibility. An ordered-out
+// window reads zero state bits, so it reports not-visible and the renderer
+// rests. The notification itself is the flip signal — no extra cache.
+- (void)windowDidChangeOcclusionState:(NSNotification*) notification {
+    (void) notification;
+    Window *w = self.handlePtr;
+    if (w) {
+        bool visible = false;
+        if ((*w).nsWindow != nil)
+            visible = ([(*w).nsWindow occlusionState] & NSWindowOcclusionStateVisible) != 0;
+        WindowEvent_fireOcclusionChanged(&(*w).lifecycle, w, visible);
+    }
 }
 @end
 
@@ -856,6 +872,10 @@ enum { LIGHT_CLOSE = 0, LIGHT_MINI = 1, LIGHT_ZOOM = 2 };
 // Build the NSWindow + C handle. Shared by every constructor. The window is
 // created HIDDEN — visibility is an explicit Window_show() decision, so
 // construct -> mutate -> show never flashes a half-configured window.
+// Initial placement also happens here (not via a post-creation move):
+// creating already-placed keeps AppKit's move tracker quiet — a
+// setFrameOrigin: on a never-shown window logs "move completed
+// without beginning".
 static Window *windowAlloc(const WindowDesc *desc) {
     @autoreleasepool {
         if (NSApp == nil)
@@ -866,18 +886,38 @@ static Window *windowAlloc(const WindowDesc *desc) {
             [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         }
 
-        NSRect frame = NSMakeRect(0, 0, (CGFloat)(*desc).width, (CGFloat)(*desc).height);
-
         NSWindowStyleMask style = NSWindowStyleMaskTitled
                                 | NSWindowStyleMaskClosable
                                 | NSWindowStyleMaskMiniaturizable
                                 | NSWindowStyleMaskResizable;
 
+        // Resolve the content rect so the resulting FRAME lands placed:
+        // centered in the main screen's visible frame by default, or at the
+        // caller's top-left x/y. frameRectForContentRect gives the chrome
+        // size, so centering is frame-exact (not off by half a titlebar).
+        CGFloat cw = (CGFloat)(*desc).width;
+        CGFloat ch = (CGFloat)(*desc).height;
+        NSRect wantFrame = [NSWindow frameRectForContentRect:NSMakeRect(0, 0, cw, ch)
+                                                  styleMask:style];
+        if ((*desc).centered || ((*desc).x == 0 && (*desc).y == 0)) {
+            NSRect avail = [[NSScreen mainScreen] visibleFrame];
+            wantFrame.origin.x = avail.origin.x + (avail.size.width - wantFrame.size.width) * 0.5;
+            wantFrame.origin.y = avail.origin.y + (avail.size.height - wantFrame.size.height) * 0.5;
+        } else {
+            NSRect screen = [[NSScreen mainScreen] frame];
+            wantFrame.origin.x = (CGFloat)(*desc).x;
+            wantFrame.origin.y = screen.size.height - (CGFloat)(*desc).y - wantFrame.size.height;
+        }
+        wantFrame.origin.x = (CGFloat) floor(wantFrame.origin.x + 0.5);
+        wantFrame.origin.y = (CGFloat) floor(wantFrame.origin.y + 0.5);
+        NSRect frame = [NSWindow contentRectForFrameRect:wantFrame
+                                              styleMask:style];
+
         NSWindow *window = [[NSWindow alloc]
             initWithContentRect:frame
-                      styleMask:style
-                         backing:NSBackingStoreBuffered
-                           defer:NO];
+                       styleMask:style
+                          backing:NSBackingStoreBuffered
+                            defer:NO];
         [window setTitle:[NSString stringWithUTF8String:(*desc).title]];
         [window setReleasedWhenClosed:NO];
 
@@ -891,6 +931,10 @@ static Window *windowAlloc(const WindowDesc *desc) {
         // Live resize never stretches preserved content (the Continuous
         // Real-Time Live Resize Law).
         [window setPreservesContentDuringLiveResize:NO];
+
+        // Hover delivery: without this, MouseMoved only fires mid-drag and
+        // darling hover is dead on arrival. The Mouse ring gets every move.
+        [window setAcceptsMouseMovedEvents:YES];
 
         // Trackpad touch delivery: the content view must opt in.
         [window.contentView setAllowedTouchTypes:NSTouchTypeMaskDirect | NSTouchTypeMaskIndirect];
@@ -985,10 +1029,10 @@ Window *Window_new(const WindowDesc *desc) {
     Window *w = windowAlloc(&d);
     if (w == nullptr)
         return nullptr;
-    if (d.centered)
-        Window_center(w);
-    else if (d.x != 0 || d.y != 0)
-        Window_setLocation(w, d.x, d.y);
+    // Placement already happened inside windowAlloc (centered default or the
+    // caller's x/y) — no post-creation move, so AppKit's move tracker stays
+    // quiet. Window_center/Window_setLocation remain for later re-placement
+    // of a live window.
     if (d.shown)
         Window_show(w);
     return w;
@@ -1309,6 +1353,11 @@ static void claimKeyAfterActivation(NSWindow *nsw) {
     else
         [[NSRunningApplication currentApplication]
             activateWithOptions:NSApplicationActivateAllWindows];
+    // Show FIRST so the window appears instantly instead of waiting behind
+    // the activation spin below. makeKeyAndOrderFront (not a bare
+    // orderFront:) so the open still plays the system animation; the key
+    // half is re-asserted after the spin + by the pump fallback.
+    [nsw makeKeyAndOrderFront:nil];
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.5];
     while (![NSApp isActive] &&
            [[NSDate date] compare:deadline] == NSOrderedAscending) {
@@ -1320,13 +1369,11 @@ static void claimKeyAfterActivation(NSWindow *nsw) {
             [NSApp sendEvent:e];
         [NSApp updateWindows];
     }
-    // Animated open: makeKeyAndOrderFront plays the system window-open
-    // animation and claims key in one call (a bare orderFront: would blink
-    // the window in harshly with no animation at all). Ordering front is
-    // guaranteed either way; key follows when the grant allows.
+    // Animated open already issued above; now settle the key grant the
+    // open requested. Ordering front was guaranteed by that call either
+    // way; key follows when the grant allows.
     if (![NSApp isActive])
         NSLog(@"window: activation denied — opening behind the active app; click the Dock icon to take focus");
-    [nsw makeKeyAndOrderFront:nil];
     if (![nsw isKeyWindow] && [nsw canBecomeKeyWindow])
         [nsw makeKeyWindow];
     sPendingKeyWindow = nsw;
@@ -1897,6 +1944,16 @@ void Window_focus(Window *window) {
 
 bool Window_isFocused(Window *window) {
     return window && Focus_isFocused((*window).id);
+}
+
+// --- Lifecycle registry ------------------------------------------------------
+// The ONLY outside path to the embedded WindowEvent: fill slots with
+// WindowEvent_setOn*(Window_getLifecycle(w), fn). Null-safe.
+
+WindowEvent *Window_getLifecycle(Window *window) {
+    if (window == nullptr)
+        return nullptr;
+    return &(*window).lifecycle;
 }
 
 // --- Monitor identity ---------------------------------------------------------

@@ -369,16 +369,22 @@ bool Window_present(Window *window, const Buffer *frame);
 // pointer identity. Destroying the window detaches its listeners.
 //
 // The OS lifecycle contract (resize/fullscreen/minimize/restore/press/focus/
-// quit/zoom) is the WindowEvent class in window/window_event.h — ONE embedded
+// quit/zoom/occlusion) is the WindowEvent class in window/window_event.h — ONE embedded
 // per window, fired by the pump pass on Thread 0. It supersedes the former
 // WindowEvent adapter list and Window_addWindowAdapter (retired; the old
 // adapter struct was macOS-only and lived in the retired Cocoa shim).
+//
+// Fill the slots through the single accessor below:
+//   WindowEvent_setOnResized(Window_getLifecycle(w), myOnResized);
+// Null-safe: nullptr when window is nullptr. This accessor is the ONLY
+// outside path to the embedded registry.
 void Window_addKeyAdapter(Window *window, const KeyHandler *adapter);
 bool Window_removeKeyAdapter(Window *window, const KeyHandler *adapter);
 void Window_addMouseAdapter(Window *window, const MouseHandler *adapter);
 bool Window_removeMouseAdapter(Window *window, const MouseHandler *adapter);
 void Window_addTouchAdapter(Window *window, const TouchHandler *adapter);
 bool Window_removeTouchAdapter(Window *window, const TouchHandler *adapter);
+WindowEvent *Window_getLifecycle(Window *window);
 
 // The running: drain all three device rings into the registered adapters.
 // Call ONCE per frame from the game loop, after Window_pollEvents(). If you
