@@ -11,7 +11,7 @@
  * MODULE: BridgeSeamTest (tests/bridge_seam_test.c)
  * LEVEL: L3 — Module Code (headless verification harness, Apple-only)
  * ============================================================================
- * Pins the bridging doctrine (docs/bridging.md §3): the pixel seam is
+ * Pins the bridging doctrine (docs/bridging.md #3): the pixel seam is
  * inert BY DESIGN — a pure AppKit window owns no raster target, no layer,
  * no present worker. Every inert function is null-safe and degrades to its
  * documented default, so consumers compile against one stable header and
@@ -37,7 +37,7 @@ static int g_failures = 0;
 int main(void) {
     printf("=== Running Bridge Seam Test Suite ===\n");
 
-    // §1 Pane/board compositing is the consumer's pass — inert here.
+    // #1 Pane/board compositing is the consumer's pass — inert here.
     CHECK("attach panes false", Window_attachPanes(nullptr, nullptr, 640, 400) == false);
     CHECK("resize panes false", Window_resizePanes(nullptr, nullptr, 800, 600) == false);
     Window_compositePanes(nullptr, nullptr);
@@ -45,17 +45,17 @@ int main(void) {
     Window_compositeBoards(nullptr);
     CHECK("composite boards no-op", true);
 
-    // §2 No layer here: metal + gravity degrade cleanly.
+    // #2 No layer here: metal + gravity degrade cleanly.
     CHECK("metal layer null", Window_metalLayer(nullptr) == nullptr);
     Window_setGravityTopLeft(nullptr);
     CHECK("gravity no-op", true);
 
-    // §3 No present worker: the transaction seam is a no-op pair.
+    // #3 No present worker: the transaction seam is a no-op pair.
     Window_workerPresentBegin();
     Window_workerPresentEnd();
     CHECK("worker present no-op", true);
 
-    // §4 No raster target: software present stays inert.
+    // #4 No raster target: software present stays inert.
     CHECK("present false", Window_present(nullptr, nullptr) == false);
 
     if (g_failures == 0)

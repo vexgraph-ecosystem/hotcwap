@@ -59,7 +59,7 @@ Rules of the pattern:
 | Key/Mouse/Touch adapters (attach by window id) | LIVE — window-scoped routing, zero global listeners | Push native events in, dispatch per window; `window_event_test` proves the registry, `window_test` the dispatch path |
 | Container/ContentPanel/ScenePanel slots | LIVE — atomic store/load | Hang your root; hotcwap never walks it |
 | Present mode / transparency / generations | LIVE — stored policy + monotonic counters | graphvex sizes swapchains off these, never asks twice |
-| Live-resize mirror + resize hook | LIVE — atomic flag + stored fn slot | The §2 pipeline: mirror, read, present-with-transaction |
+| Live-resize mirror + resize hook | LIVE — atomic flag + stored fn slot | The #2 pipeline: mirror, read, present-with-transaction |
 | `contentView` anchor | LIVE — AppKit view handle | Render repos create their own `CAMetalLayer` on it |
 | `attach/resize/compositePanes`, `compositeBoards` | INERT (`false`/no-op, `;;INTENTION`) | Owned by the consumer's own pass; asserted by `bridge_seam_test` |
 | `workerPresentBegin/End`, `setGravityTopLeft` | INERT (no-op) | No layer here, nothing to commit; asserted by `bridge_seam_test` |
@@ -79,4 +79,4 @@ the darling compositor migration, never one at a time.
   headless) are tracked in a platform appendix — they do not gate the
   macOS host milestone.
 - The remaining feature work is the loading process itself: state handoff
-  (§8) and the TUI session proof (§2.7). Pixels are never on this list.
+  (#8) and the TUI session proof (#2.7). Pixels are never on this list.
