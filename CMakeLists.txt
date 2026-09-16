@@ -33,7 +33,7 @@ add_library(hotcwap STATIC
         kernel/process.c
         kernel/console.c
     kernel/kernel.c
-    spoke/vexspoke.c
+    spoke/lifetime.c
     hot/hot.c
     hot/hot_trampoline.c
     hot/hot_retire.c
@@ -56,6 +56,24 @@ target_compile_options(hot_behavior PRIVATE -Wall -Wextra -Werror)
 set_target_properties(hot_behavior PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules")
+
+# #8.5 rollback seam: the SAME source reconfigured with a foreign schema
+# magic — a module whose Hot_restore rejects the canonical state blob. The
+# manifest_rollback_test promotes this build as generation 2 and asserts the
+# loader rolls the swap back (old generation stays live, no stamp advance)
+# instead of adopting it. OUTPUT_NAME collides with hot_behavior, so it lands
+# in its own modules_bad directory.
+add_library(hot_behavior_bad MODULE hot/hot_behavior.c)
+target_include_directories(hot_behavior_bad PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../vexspoke/src)
+target_compile_options(hot_behavior_bad PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(hot_behavior_bad PRIVATE
+    HOT_BEHAVIOR_SCHEMA_MAGIC=0xBADC0DE5u)
+set_target_properties(hot_behavior_bad PROPERTIES
+    OUTPUT_NAME hot_behavior
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules_bad"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/modules_bad")
 
 # Check if vexspoke is already available as a target (parent build)
 if(NOT TARGET vexspoke)
@@ -128,7 +146,7 @@ elseif(WIN32)
         target_sources(hotcwap PRIVATE window/window.c)
     else()
         target_sources(hotcwap PRIVATE window/window_win32.c)
-        target_link_libraries(hotcwap PUBLIC user32 gdi32)
+        target_link_libraries(hotcwap PUBLIC user32 gdi32 dwmapi)
     endif()
 elseif(UNIX)
     option(HOTCWAP_USE_WAYLAND "Build the lean Wayland draft (window_wayland.c); auto-falls back to window_linux.c when the libraries are absent" OFF)
@@ -161,7 +179,7 @@ endif()
 # symbols, so it builds only where the vexspoke target exists.
 if(NOT TARGET spoke_test AND EXISTS "${HOTCWAP_TEST_DIR}/spoke_test.c" AND TARGET vexspoke)
     add_executable(spoke_test
-        spoke/vexspoke.c
+        spoke/lifetime.c
         ${HOTCWAP_TEST_DIR}/spoke_test.c
     )
     target_include_directories(spoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -207,7 +225,26 @@ if(NOT TARGET manifest_hot_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_hot_tes
     add_dependencies(manifest_hot_test hot_behavior)
 endif()
 
-# Inert pixel-seam contract test (docs/bridging.md §3): pins the safe
+# #8.5 automated-state-rollback end-to-end test: generation 2 is a
+# foreign-magic hot_behavior build whose Hot_restore REJECTS generation 1's
+# state blob. The loader must rehydrate BEFORE commit, roll the whole swap
+# back (generation 1 + its set phaseBias stay live), surface
+# HOT_ERROR_RESTORE_FAILED without advancing the stamp, reject the bad set
+# again on the next poll, and heal on a subsequent good promote (gen 3).
+if(NOT TARGET manifest_rollback_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_rollback_test.c")
+    add_executable(manifest_rollback_test
+        ${HOTCWAP_TEST_DIR}/manifest_rollback_test.c
+    )
+    target_include_directories(manifest_rollback_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(manifest_rollback_test PRIVATE -Wall -Wextra -Werror)
+    target_compile_definitions(manifest_rollback_test PRIVATE
+        HOT_BEHAVIOR_MODULE="$<TARGET_FILE:hot_behavior>"
+        HOT_BEHAVIOR_BAD_MODULE="$<TARGET_FILE:hot_behavior_bad>")
+    target_link_libraries(manifest_rollback_test PRIVATE hotcwap)
+    add_dependencies(manifest_rollback_test hot_behavior hot_behavior_bad)
+endif()
+
+# Inert pixel-seam contract test (docs/bridging.md #3): pins the safe
 # defaults (false/nullptr/no-op) of every function hotcwap keeps inert by
 # design. In-repo (tests/) so it is tracked — unlike the umbrella _tests/
 # scratch dir. Links hotcwap for the per-OS backend; vexspoke input symbols

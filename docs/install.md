@@ -1,10 +1,9 @@
-# The MANIFEST(...) Install Layout — hotcwap's "Manifest Binary Way"
+# The `MANIFEST(...)` Install Layout — hotcwap's "Manifest Binary Way"
 
-`hot/manifest.h/.c` is the per-app **install-layout authority**. The
-manifest is the on-disk install tree **plus** the `manifest.json` library
-catalog — the plain-JSON file any runtime (the downloader) edits. There is no
-proprietary policy seed to keep in sync; `MANIFEST.mf` (the old JSON seed) is
-retired.
+`hot/manifest.h/.c` is the per-app **install-layout authority**. The manifest
+is the on-disk install tree **plus** the `manifest.json` library catalog — the
+plain-JSON file any runtime (the downloader) edits. There is no proprietary
+policy seed to keep in sync; `MANIFEST.mf` (the old JSON seed) is retired.
 
 This document describes the process: how the path resolves, what the catalog
 declares, what the ladder holds, how first-run reflection works, and how the
@@ -138,7 +137,7 @@ behavior — all dylibs, `.spv` blobs, fonts, config — lives in the manifest
 tree under `current/<library>/`. The OS binary never mutates on disk; the
 behavior set does.
 
-## 6. Two update experiences (the "hot c wap")
+## 6. Two update experiences (the "hot cwap")
 
 Both modes share the ladder and the same verification contract: every
 top-level payload entry must be a **declared section** of the target library
@@ -148,9 +147,9 @@ WHOLE update — never a partial stage. The older `HotStage_verify` (JSON
 
 ### MODE 1 — HOT SWAP (app running)
 
-Beyond the ladder, MODE 1 is `hot/hot.c`'s dual-poll pipeline:
+Beyond the ladder, MODE 1 is `hot/hot.c`'s dual-poll handshake:
 `stamp check → off-thread state save → dlopen + fail-closed verify →
-trampoline swap → state restore → retire ring (4-poll grace)`. Each poll
+restore-before-commit → trampoline swap → retire ring (4-poll grace)`. Each poll
 compares `MANIFEST_GENERATION(<library>)` (reads
 `bin/current/<library>.generation`) against the last-seen generation:
 
@@ -159,9 +158,14 @@ compares `MANIFEST_GENERATION(<library>)` (reads
    `Hot_save` and returns `loaded==0` — hot loops never pay serialization.
 2. The next poll dlopens EVERY section of the new current set and verifies
    the whole library fail-closed (`dlopen` + `VkModuleGetTrampolines` on each
-   before any commit), atomically swaps the trampoline table, restores the
-   saved blobs into the fresh images, and retires the old handles into the
-   grace ring.
+   before any commit), then **restores** the saved blobs into the STAGED
+   images BEFORE any commit — a section whose `Hot_restore` rejects its blob
+   (or a snapshotted slot with no `Hot_restore`) rolls the WHOLE swap back
+   (#8.5 Automated State Rollback): staged handles close, the old generation
+   + saved state stay live, the stamp never advances, and the next poll
+   re-attempts once the payload is fixed. Only when every restore passes does
+   it atomically swap the trampoline table and retire the old handles into
+   the grace ring.
 
 Modules expose exports via the struct contract (`VkModuleGetTrampolines`); the
 retired JSON `Hot_manifest` ABI gate is gone — the ladder placement is the
@@ -201,7 +205,7 @@ bool ok = MANIFEST_PROMOTE();
 
 `MANIFEST.mf` (repo root) and `spoke/MANIFEST.md` are retired. The
 `consumers[]` allow-list that governed which projects may bind vexspoke now
-reads as a **documented baseline** in `spoke/vexspoke.h` — the authority for
+reads as a **documented baseline** in `spoke/lifetime.h` — the authority for
 what may board is the on-disk install ladder plus the `manifest.json` catalog
 (vexspoke downloads → `bin/new` → `MANIFEST_UPDATE` → `MANIFEST_PROMOTE`),
 never a JSON seed sitting next to the source.
@@ -214,3 +218,4 @@ exhaustively (null, bounds, mount state, declared-section match, mkdir/rename
 failures) and return `false` with zero partial state; the hot `Hot_poll` path
 stays minimal. No function in this unit blocks unboundedly or allocates
 outside stack buffers.
+</content>

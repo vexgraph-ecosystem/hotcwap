@@ -28,8 +28,12 @@
  * worker (hot loops never pay the serialization), then on a later pass it
  * dlopens every section of the new current set, verifies the WHOLE library
  * fail-closed (dlopen + VkModuleGetTrampolines on every section before any
- * commit), atomically swaps the trampoline table, restores the saved blobs
- * into the fresh images, and retires the old handles into the grace ring.
+ * commit), rehydrates the saved blobs into the STAGED images BEFORE any
+ * commit, then atomically swaps the trampoline table and retires the old
+ * handles into the grace ring. A section whose Hot_restore rejects its blob
+ * rolls the whole swap back (#8.5 Automated State Rollback): the old
+ * generation stays live, the generation never advances, and the next poll
+ * re-attempts once the payload is fixed.
  * The rename slide (MANIFEST_PROMOTE) IS the swap — there is no clone step
  * and no watch dir. Hot_poll() runs on main thread only.
  *
@@ -122,9 +126,19 @@
             "manifest catalog is the contract; MANIFEST_UPDATE fails-closed "
             "against undeclared stems). A section that vanishes from a promoted "
             "current set keeps its old slot + handle mapped (never retired) so "
-            "stale trampolines never dangle — the unshared image lingers until "
-            "HotShutdown. Removing a section is a library-uninstall event "
-            "handled by a full restart, per the Conflict Triage Law.")
+"stale trampolines never dangle — the unshared image lingers until "
+             "HotShutdown. Removing a section is a library-uninstall event "
+             "handled by a full restart, per the Conflict Triage Law.")
+
+;;INTENTION("Restore-before-commit (#8.5 Automated State Rollback): a "
+            "Hot_restore rejection — or a missing Hot_restore on a slot the "
+            "previous generation snapshotted — fails the WHOLE swap: staged "
+            "images close, old trampolines + state stay live, and the "
+            "generation never advances. The ladder's current set keeps the "
+            "bad payload (rejected again on every poll) until the deployer "
+            "promotes a fixed set, so rollback self-heals. A module that "
+            "intentionally drops Hot_save/Hot_restore must re-scope its "
+            "state handoff first.")
 
 #define HOT_MAX_MODULES 32
 #define HOT_PATH_LEN 512
@@ -140,7 +154,7 @@ typedef struct {
 
 typedef struct {
     char name[HOT_MANIFEST_MAX_NAME];
-    uint8_t buf[HOT_SAVE_SLOT_CAP];
+    alignas(16) uint8_t buf[HOT_SAVE_SLOT_CAP];
     size_t len;
 } HotSaveSlot;
 
@@ -340,10 +354,12 @@ static bool snapshot_begin(HotModule *hot) {
 // Load a whole manifest library generation and commit it. Phase A verifies
 // EVERY section (dlopen + VkModuleGetTrampolines present) before anything is
 // touched — on any failure every staged handle is closed and the previous
-// generation stays live, untouched. Phase B commits: retire old handles,
-// adopt new, swap trampoline rows, rehydrate saved state. Generation only
-// advances on full success, so a failed swap re-enters the handshake on the
-// next poll and self-heals once the payload is fixed.
+// generation stays live, untouched. Phase B rehydrates the saved blobs into
+// the STAGED images BEFORE any commit; a rejecting Hot_restore rolls the
+// whole swap back (#8.5 Automated State Rollback). Phase C commits: retire
+// old handles, adopt new, swap trampoline rows. Generation only advances on
+// full success, so a failed swap re-enters the handshake on the next poll
+// and self-heals once the payload is fixed.
 static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outLoaded) {
     HotTrampolineTable *table = &(*hot).trampolines;
     HotRetireRing *ring = &(*hot).retireRing;
@@ -457,7 +473,55 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
 
     uint64_t newGen = MANIFEST_GENERATION((*hot).library);
 
-    // Phase B — commit: adopt new handles, swap trampoline rows, rehydrate.
+    // Phase B — rehydrate the saved state into the STAGED (new) images BEFORE
+    // any commit (#8.5 Automated State Rollback). A module that rejects the
+    // previous generation's blob fails the whole swap: every staged handle
+    // closes, the old generation (code + trampolines + state) stays live, and
+    // the generation does NOT advance — the next poll re-enters the handshake
+    // and re-attempts once the payload is fixed.
+    for (size_t i = 0; i < (*hot).saveCount; i++) {
+        HotSaveSlot *slot = &(*hot).saveSlots[i];
+        HotStagedSection *match = NULL;
+        for (uint32_t k = 0; k < stagedCount; k++) {
+            if (strcmp((*staged[k].mod).name, (*slot).name) == 0)
+                match = &staged[k];
+        }
+        if (!match)
+            continue; // section absent from the new set; its old slot stays mapped
+        typedef bool (*RestoreFn)(const void *, size_t);
+        RestoreFn restore = (RestoreFn) dlsym((*match).handle, "Hot_restore");
+        bool restored = (restore && restore((*slot).buf, (*slot).len));
+        if (!restored && restore) {
+            typedef bool (*MigrateFn)(const char *, const void *, size_t, void *, size_t, size_t *);
+            MigrateFn migrate = (MigrateFn) dlsym((*match).handle, "Hot_migrate");
+            if (migrate) {
+                alignas(16) uint8_t migratedBuf[HOT_SAVE_SLOT_CAP];
+                size_t migratedLen = 0;
+                char oldGenStr[32];
+                snprintf(oldGenStr, sizeof(oldGenStr), "%llu.0.0", (unsigned long long) (*hot).generation);
+                if ((migrate(oldGenStr, (*slot).buf, (*slot).len, migratedBuf, sizeof(migratedBuf), &migratedLen) ||
+                     migrate("1.0.0", (*slot).buf, (*slot).len, migratedBuf, sizeof(migratedBuf), &migratedLen)) &&
+                    migratedLen > 0) {
+                    restored = restore(migratedBuf, migratedLen);
+                }
+            }
+        }
+        if (!restored) {
+            for (uint32_t k = 0; k < stagedCount; k++)
+                dlclose(staged[k].handle); // never adopted — safe to close directly
+            (*hot).saveCount = 0;
+            snprintf((*hot).last_error, sizeof((*hot).last_error),
+                     "Restore rejected by %s (%zu bytes) — generation %llu stays live",
+                     (*slot).name, (*slot).len, (unsigned long long) (*hot).generation);
+            fprintf(stderr, "[hot] ROLLBACK: %s rejected restored state (%zu bytes) — "
+                            "keeping generation %llu live, generation NOT advanced\n",
+                    (*slot).name, (*slot).len, (unsigned long long) (*hot).generation);
+            return HOT_ERROR_RESTORE_FAILED;
+        }
+    }
+
+    // Phase C — commit: retire old handles, adopt new, swap trampoline rows.
+    // State already lives inside the fresh images (Phase B restored in place).
     for (uint32_t i = 0; i < stagedCount; i++) {
         HotStagedSection *s = &staged[i];
         HotModuleInternal *mod = (*s).mod;
@@ -479,21 +543,6 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
         loaded++;
         fprintf(stderr, "[hot] reloaded %s (generation %llu)\n",
                 (*mod).name, (unsigned long long) newGen);
-    }
-
-    // Rehydrate module state captured off-thread from the previous generation.
-    for (size_t i = 0; i < (*hot).saveCount; i++) {
-        HotSaveSlot *slot = &(*hot).saveSlots[i];
-        HotModuleInternal *mod = find_module(hot, (*slot).name);
-        if (!mod || !(*mod).loaded || !(*mod).handle)
-            continue;
-        typedef bool (*RestoreFn)(const void *, size_t);
-        RestoreFn restore = (RestoreFn) dlsym((*mod).handle, "Hot_restore");
-        if (!restore)
-            continue;
-        if (!restore((*slot).buf, (*slot).len))
-            fprintf(stderr, "[hot] WARNING: restore failed for %s (%zu bytes) — module runs with fresh state\n",
-                    (*slot).name, (*slot).len);
     }
     (*hot).saveCount = 0;
 

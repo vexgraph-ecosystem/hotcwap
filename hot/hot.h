@@ -18,9 +18,13 @@
 //   1. snapshot the CURRENT generation's module state OFF-THREAD (a worker
 //      thread), so hot loops never pay the serialization cost, then
 //   2. on a later pass, dlopen every section from bin/current/<library>,
-//      verify the whole library (fail-closed), atomically swap the
-//      trampoline table, restore the saved blobs, and retire the old
-//      handles into the grace ring.
+//      verify the whole library (fail-closed), rehydrate the saved blobs
+//      into the STAGED images BEFORE any commit, then atomically swap the
+//      trampoline table and retire the old handles into the grace ring.
+//      A section whose Hot_restore rejects its blob rolls the whole swap
+//      back (#8.5 Automated State Rollback): staged handles close, the old
+//      generation stays live, and the generation never advances — the next
+//      poll re-attempts once the payload is fixed.
 //
 // Old handles stay mapped HOT_RETIRED_GENERATIONS polls (the retire ring)
 // so in-flight calls into the old generation drain before dlclose.
@@ -40,6 +44,7 @@ typedef enum {
     HOT_ERROR_ABI_MISMATCH,
     HOT_ERROR_VERSION_MISMATCH,
     HOT_ERROR_INIT_FAILED,
+    HOT_ERROR_RESTORE_FAILED,
     HOT_ERROR_OUT_OF_MEMORY,
 } HotResult;
 
@@ -60,7 +65,9 @@ void HotShutdown(HotModule *hot);
 // returns HOT_OK if nothing changed, HOT_OK + loaded_count > 0 when a swap
 // landed. A swap that must preserve state spans two polls: this call kicks
 // the off-thread snapshot and returns; the NEXT call swaps once the worker
-// has published it.
+// has published it. A new image whose Hot_restore rejects the saved blob
+// rolls the swap back and returns HOT_ERROR_RESTORE_FAILED (generation
+// unchanged, old code + state still live).
 HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count);
 
 // Get a function pointer by name (trampoline table lookup, stable until the

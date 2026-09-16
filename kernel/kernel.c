@@ -26,7 +26,7 @@
  *
  * STRUCT FIELDS (Mirroring kernel/kernel.h — exactly this file's class):
  * ----------------------------------------------------------------------------
- *   VexspokeApi spoke;                          // vexspoke bridge table (sole touchpoint)
+ *   Lifetime lifetime;                          // Lifetime memory substrate (master + transient arenas)
  *   void *arena;                                // opaque master arena (attested, never dereferenced)
  *   void *transientArena;                       // opaque scratch arena
  *   uint64_t arenaType;                         // provider id, nonzero = attested
@@ -124,29 +124,18 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     Kernel *self = (Kernel*) calloc(1, sizeof(Kernel));
     if (!self)
         return NULL;
-    // Bind the spoke table first: every arena below arrives through it, so
-    // this file never names a vexspoke type (hotcwap lives on its own).
-    if (!VexspokeApi_fillStatic(&(*self).spoke)) {
+    // Create the Lifetime memory substrate directly via vexspoke's MemoryArena.
+    Lifetime lt = Lifetime_create(arenaBytes, transientBytes);
+    if (!Lifetime_isValid(&lt)) {
+        Lifetime_destroy(&lt);
         free(self);
         return NULL;
     }
-    uint64_t arenaType = 0;
-    void *arena = (*self).spoke.createArena(arenaBytes, &arenaType);
-    if (arena == nullptr || arenaType == 0) {
-        free(self);
-        return NULL;
-    }
-    uint64_t scratchType = 0;
-    void *scratch = (*self).spoke.createArena(transientBytes, &scratchType);
-    if (scratch == nullptr || scratchType == 0) {
-        (*self).spoke.destroyArena(arena);
-        free(self);
-        return NULL;
-    }
-    (*self).arena = arena;
-    (*self).arenaType = arenaType;
-    (*self).transientArena = scratch;
-    (*self).transientArenaType = scratchType;
+    (*self).lifetime = lt;
+    (*self).arena = lt.persistentArena;
+    (*self).arenaType = lt.persistentType;
+    (*self).transientArena = lt.transientArena;
+    (*self).transientArenaType = lt.transientType;
     (*self).applicationCount = 0;
     (*self).processCount = 0;
     (*self).consoleCount = 0;
@@ -192,16 +181,11 @@ bool Kernel_free(Kernel *self) {
         (*self).consoles[i] = NULL;
     (*self).consoleCount = 0;
 
-    void *scratch = (*self).transientArena;
-    void *arena = (*self).arena;
     (*self).transientArena = NULL;
     (*self).transientArenaType = 0;
     (*self).arena = NULL;
     (*self).arenaType = 0;
-    if (scratch)
-        (*self).spoke.destroyArena(scratch);
-    if (arena)
-        (*self).spoke.destroyArena(arena);
+    Lifetime_destroy(&(*self).lifetime);
     free(self);
     return true;
 }
@@ -676,4 +660,12 @@ void *Kernel_getTransientArena(const Kernel *self) {
     if (!self)
         return NULL;
     return (*self).transientArena;
+}
+
+Lifetime *Kernel_getLifetime(Kernel *self) {
+    return self ? &(*self).lifetime : NULL;
+}
+
+const Lifetime *Kernel_lifetime(const Kernel *self) {
+    return self ? &(*self).lifetime : NULL;
 }

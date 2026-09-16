@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#include "spoke/vexspoke.h"
+#include "spoke/lifetime.h"
 #include "application.h"
 #include "console.h"
 #include "process.h"
@@ -87,7 +87,7 @@ typedef struct KernelDeferred {
 } KernelDeferred;
 
 struct Kernel {
-    VexspokeApi spoke;                     // vexspoke bridge table (sole vexspoke touchpoint)
+    Lifetime lifetime;                     // Lifetime memory substrate (master + transient arenas)
     void *arena;                           // opaque master arena (provider-attested, never dereferenced)
     void *transientArena;                  // opaque scratch arena (reset, never freed mid-run)
     uint64_t arenaType;                    // provider-reported id, nonzero = attested
@@ -233,5 +233,7 @@ uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap);
 // --- Arena access (the Symmetric Getter/Setter Completeness Law symmetric getters) ---
 void *Kernel_getArena(const Kernel *self);
 void *Kernel_getTransientArena(const Kernel *self);
+Lifetime *Kernel_getLifetime(Kernel *self);
+const Lifetime *Kernel_lifetime(const Kernel *self);
 
 #endif
