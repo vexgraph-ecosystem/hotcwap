@@ -106,6 +106,7 @@ void Window_destroy(Window *window);
 
 // True once the user has asked to close (red button / Cmd+W).
 bool Window_shouldClose(Window *window);
+void Window_setShouldClose(Window *window, bool shouldClose);
 
 // Drain the OS event queue. Call once per frame from the engine loop.
 void Window_pollEvents(void);

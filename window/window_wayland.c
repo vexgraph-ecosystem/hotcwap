@@ -1412,6 +1412,11 @@ bool Window_shouldClose(Window *window) {
     return window ? atomic_load_explicit(&(*window).shouldClose, memory_order_relaxed) : true;
 }
 
+void Window_setShouldClose(Window *window, bool shouldClose) {
+    if (window != nullptr)
+        atomic_store_explicit(&(*window).shouldClose, shouldClose, memory_order_relaxed);
+}
+
 // --- Poll loop ---------------------------------------------------------------
 
 void Window_pollEvents(void) {

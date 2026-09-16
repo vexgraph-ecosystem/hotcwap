@@ -110,6 +110,11 @@ bool Window_shouldClose(Window *window) {
     return false;
 }
 
+void Window_setShouldClose(Window *window, bool shouldClose) {
+    (void) window;
+    (void) shouldClose;
+}
+
 ;;INCOMPLETE // XPending/XNextEvent loop; no-op until implemented.
 void Window_pollEvents(void) {
 }
