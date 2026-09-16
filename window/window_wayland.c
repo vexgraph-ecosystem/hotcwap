@@ -1877,6 +1877,10 @@ void *Window_contentView(Window *window) {
     return window ? (void*) (*window).surface : nullptr;
 }
 
+void *Window_nativeHandle(const Window *window) {
+    return window ? (void*) (*window).surface : nullptr;
+}
+
 // No Metal here: Wayland has no CAMetalLayer ancestor (the lean backend's
 // metalLayer is nil, exactly like the Cocoa backend's on non-Apple).
 void *Window_metalLayer(Window *window) {

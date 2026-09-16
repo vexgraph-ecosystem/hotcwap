@@ -1844,6 +1844,12 @@ void *Window_contentView(Window *window) {
     return (void*) (*window).hwnd;
 }
 
+void *Window_nativeHandle(const Window *window) {
+    if (window == nullptr || (*window).hwnd == nullptr)
+        return nullptr;
+    return (void*) (*window).hwnd;
+}
+
 // ;;INTENTION("Window_metalLayer is gone from this file by design (no Metal
 // here). Returns nullptr so the VK_EXT_metal_surface path degrades cleanly
 // until the render repos create their own surface. Retires with the composite

@@ -413,4 +413,16 @@ void Window_compositeBoards(Window *window) {
     (void) window;
 }
 
+;;INCOMPLETE
+void *Window_contentView(Window *window) {
+    (void) window;
+    return nullptr;
+}
+
+;;INCOMPLETE
+void *Window_nativeHandle(const Window *window) {
+    (void) window;
+    return nullptr;
+}
+
 #endif

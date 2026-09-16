@@ -336,6 +336,9 @@ void Window_setCursorLocked(Window *window, bool locked);
 // need (MoltenVK wraps it in a CAMetalLayer). THREAD CONTRACT: thread 0 only.
 void *Window_contentView(Window *window);
 
+// Native OS window handle (NSWindow* on macOS, HWND on Win32, wl_surface* on Linux).
+void *Window_nativeHandle(const Window *window);
+
 // Creates (or reuses) a CAMetalLayer on the content view — the VK_EXT_metal_surface
 // path. Returns nullptr off-Apple. THREAD CONTRACT: thread 0 only.
 void *Window_metalLayer(Window *window);

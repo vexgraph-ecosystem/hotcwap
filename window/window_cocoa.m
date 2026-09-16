@@ -1864,6 +1864,12 @@ void *Window_contentView(Window *window) {
     return (__bridge void*) [(*window).nsWindow contentView];
 }
 
+void *Window_nativeHandle(const Window *window) {
+    if (window == nullptr || (*window).nsWindow == nil)
+        return nullptr;
+    return (__bridge void*) (*window).nsWindow;
+}
+
 // ;;INTENTION("Window_metalLayer is gone from this file by design (no Metal here). Returns nullptr so the VK_EXT_metal_surface path degrades cleanly until the render repos create their own CAMetalLayer on the content view. Retires with the composite seam.")
 void *Window_metalLayer(Window *window) {
     (void) window;
