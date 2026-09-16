@@ -300,6 +300,8 @@ void Window_setMovableByBackground(Window *window, bool movable);
 
 // --- Z-Order & Presentation ---
 void Window_bringToFront(Window *window); // Pulls window to the top of its level without stealing keyboard focus
+void Window_attachChild(Window *parent, Window *child); // Glue child above parent: they order, move, and hide as one unit (dialog modality stacking)
+void Window_detachChild(Window *parent, Window *child); // Unglue a child attached above (detach before hide/destroy)
 
 
 // --- Minimize ---
@@ -409,6 +411,8 @@ void Window_dispatchEvents(Window *window);
 uint32_t Window_id(Window *window);      // 0 when window is nullptr
 void Window_focus(Window *window);       // ask the OS to make this key
 bool Window_isFocused(Window *window);   // is THIS the spotlight right now?
+void Window_setKeyEnabled(Window *window, bool enabled); // false = the OS refuses this window key (modal dialogs holding their parent); render + order unaffected
+bool Window_isKeyEnabled(const Window *window);          // false while held by a modal dialog (defaults true)
 
 // --- Monitor identity ---
 //

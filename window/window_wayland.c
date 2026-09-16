@@ -319,6 +319,7 @@ struct Window {
     _Atomic(void*) bottomLayer;
 
     _Atomic bool enabled;
+    _Atomic bool keyEnabled; // stored; OS-level key refusal is Cocoa-only for now
     bool lastFocused;
     _Atomic uint32_t monitorId;
     WindowCursorType cursorType;
@@ -1337,6 +1338,7 @@ static Window *waylandAlloc(const WindowDesc *desc) {
     atomic_store_explicit(&(*window).topLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*window).bottomLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*window).enabled, true, memory_order_relaxed);
+    atomic_store_explicit(&(*window).keyEnabled, true, memory_order_relaxed);
     atomic_store_explicit(&(*window).monitorId, 0, memory_order_relaxed);
     (*window).lastFocused = false;
     (*window).cursorType = WINDOW_CURSOR_DEFAULT;
@@ -1814,6 +1816,17 @@ void Window_bringToFront(Window *window) {
     (void) window;
 }
 
+// ;;INTENTION("Wayland has no client-side child-window ordering: attach/detach are link-parity no-ops; the compositor owns stacking")
+void Window_attachChild(Window *parent, Window *child) {
+    (void) parent;
+    (void) child;
+}
+
+void Window_detachChild(Window *parent, Window *child) {
+    (void) parent;
+    (void) child;
+}
+
 // --- Minimize ----------------------------------------------------------------
 
 void Window_minimize(Window *window) {
@@ -2031,6 +2044,19 @@ void Window_focus(Window *window) {
 
 bool Window_isFocused(Window *window) {
     return window ? (*window).lastFocused : false;
+}
+
+// ;;INTENTION("Wayland stores the key gate without OS enforcement: the compositor owns activation; the darling redirect remains the enforcer here")
+void Window_setKeyEnabled(Window *window, bool enabled) {
+    if (window == nullptr)
+        return;
+    atomic_store_explicit(&(*window).keyEnabled, enabled, memory_order_relaxed);
+}
+
+bool Window_isKeyEnabled(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return atomic_load_explicit(&(*window).keyEnabled, memory_order_relaxed);
 }
 
 // --- Monitor identity --------------------------------------------------------

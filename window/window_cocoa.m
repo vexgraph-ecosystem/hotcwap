@@ -277,6 +277,7 @@ struct Window {
     _Atomic(void*) bottomLayer;
 
     _Atomic bool enabled;
+    _Atomic bool keyEnabled; // false = canBecomeKeyWindow refuses (held by a modal dialog)
     bool lastFocused;
     _Atomic uint32_t monitorId;
     WindowCursorType cursorType;
@@ -869,6 +870,22 @@ void Window_pollEvents(void) {
 // the Window_macOS_* setters consume it further below).
 enum { LIGHT_CLOSE = 0, LIGHT_MINI = 1, LIGHT_ZOOM = 2 };
 
+// Key-gate window subclass: while a modal dialog holds its parent, the
+// parent's C flag flips and AppKit itself refuses it key — no focus flash,
+// no input gap, no yank-back. Render + ordering are untouched (only key).
+@interface VexWindow : NSWindow
+@property (assign, nonatomic) Window *vexHandle;
+@end
+
+@implementation VexWindow
+- (BOOL)canBecomeKeyWindow {
+    Window *h = self.vexHandle;
+    if (h != NULL && !atomic_load_explicit(&(*h).keyEnabled, memory_order_relaxed))
+        return NO;
+    return [super canBecomeKeyWindow];
+}
+@end
+
 // Build the NSWindow + C handle. Shared by every constructor. The window is
 // created HIDDEN — visibility is an explicit Window_show() decision, so
 // construct -> mutate -> show never flashes a half-configured window.
@@ -913,7 +930,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         NSRect frame = [NSWindow contentRectForFrameRect:wantFrame
                                               styleMask:style];
 
-        NSWindow *window = [[NSWindow alloc]
+        VexWindow *window = [[VexWindow alloc]
             initWithContentRect:frame
                        styleMask:style
                           backing:NSBackingStoreBuffered
@@ -946,6 +963,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         if (w == nullptr)
             return nullptr;
         (*w).nsWindow = window;
+        window.vexHandle = w;
         (*w).delegate = delegate;
         WindowEvent_init(&(*w).lifecycle);
         atomic_store_explicit(&(*w).shouldClose, false, memory_order_relaxed);
@@ -967,6 +985,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         atomic_store_explicit(&(*w).topLayer, nullptr, memory_order_relaxed);
         atomic_store_explicit(&(*w).bottomLayer, nullptr, memory_order_relaxed);
         atomic_store_explicit(&(*w).enabled, true, memory_order_relaxed);
+        atomic_store_explicit(&(*w).keyEnabled, true, memory_order_relaxed);
         (*w).lastFocused = false;
         atomic_store_explicit(&(*w).monitorId, 0, memory_order_relaxed);
         (*w).cursorType = WINDOW_CURSOR_DEFAULT;
@@ -1729,6 +1748,30 @@ void Window_bringToFront(Window *window) {
     }
 }
 
+void Window_attachChild(Window *parent, Window *child) {
+    if (parent == nullptr || child == nullptr)
+        return;
+    @autoreleasepool {
+        NSWindow *p = (*parent).nsWindow;
+        NSWindow *c = (*child).nsWindow;
+        if (p == nil || c == nil || p == c)
+            return;
+        [p addChildWindow:c ordered:NSWindowAbove];
+    }
+}
+
+void Window_detachChild(Window *parent, Window *child) {
+    if (parent == nullptr || child == nullptr)
+        return;
+    @autoreleasepool {
+        NSWindow *p = (*parent).nsWindow;
+        NSWindow *c = (*child).nsWindow;
+        if (p == nil || c == nil)
+            return;
+        [p removeChildWindow:c];
+    }
+}
+
 // --- Minimize ---
 
 void Window_minimize(Window *window) {
@@ -1983,6 +2026,18 @@ void Window_focus(Window *window) {
 
 bool Window_isFocused(Window *window) {
     return window && Focus_isFocused((*window).id);
+}
+
+void Window_setKeyEnabled(Window *window, bool enabled) {
+    if (window == nullptr)
+        return;
+    atomic_store_explicit(&(*window).keyEnabled, enabled, memory_order_relaxed);
+}
+
+bool Window_isKeyEnabled(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return atomic_load_explicit(&(*window).keyEnabled, memory_order_relaxed);
 }
 
 // --- Lifecycle registry ------------------------------------------------------

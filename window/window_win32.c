@@ -315,6 +315,7 @@ struct Window {
     _Atomic(void*) bottomLayer;
 
     _Atomic bool enabled;
+    _Atomic bool keyEnabled; // stored; OS-level key refusal is Cocoa-only for now
     bool lastFocused;
     _Atomic uint32_t monitorId;
     WindowCursorType cursorType;
@@ -1051,6 +1052,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
     atomic_store_explicit(&(*w).topLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*w).bottomLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*w).enabled, true, memory_order_relaxed);
+    atomic_store_explicit(&(*w).keyEnabled, true, memory_order_relaxed);
     (*w).lastFocused = false;
     atomic_store_explicit(&(*w).monitorId, 0, memory_order_relaxed);
     (*w).cursorType = WINDOW_CURSOR_DEFAULT;
@@ -1646,6 +1648,17 @@ void Window_bringToFront(Window *window) {
     BringWindowToTop((*window).hwnd);
 }
 
+// ;;INTENTION("WIN32 has no child-window ordering contract matching AppKit: attach/detach are link-parity no-ops; stacking stays caller-ordered")
+void Window_attachChild(Window *parent, Window *child) {
+    (void) parent;
+    (void) child;
+}
+
+void Window_detachChild(Window *parent, Window *child) {
+    (void) parent;
+    (void) child;
+}
+
 // --- Minimize ---
 
 void Window_minimize(Window *window) {
@@ -1969,6 +1982,19 @@ void Window_focus(Window *window) {
 
 bool Window_isFocused(Window *window) {
     return window && Focus_isFocused((*window).id);
+}
+
+// ;;INTENTION("WIN32 stores the key gate without OS enforcement: no WS_CHILD key refusal matches AppKit; the darling redirect remains the enforcer here")
+void Window_setKeyEnabled(Window *window, bool enabled) {
+    if (window == nullptr)
+        return;
+    atomic_store_explicit(&(*window).keyEnabled, enabled, memory_order_relaxed);
+}
+
+bool Window_isKeyEnabled(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return atomic_load_explicit(&(*window).keyEnabled, memory_order_relaxed);
 }
 
 // --- Lifecycle registry ------------------------------------------------------
