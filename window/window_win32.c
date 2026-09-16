@@ -1472,6 +1472,36 @@ void Window_setUndecorated(Window *window, int mode) {
         Window_setBlur(window, 0.0f);
 }
 
+void Window_setDecorated(Window *window, bool decorated) {
+    Window_setUndecorated(window, decorated ? WINDOW_DECORATED : WINDOW_UNDECORATED_BORDERLESS);
+}
+
+bool Window_isDecorated(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return (*window).decorated == WINDOW_DECORATED;
+}
+
+void Window_setNaked(Window *window, bool naked) {
+    Window_setUndecorated(window, naked ? WINDOW_UNDECORATED_NAKED : WINDOW_DECORATED);
+}
+
+bool Window_isNaked(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return (*window).decorated == WINDOW_UNDECORATED_NAKED;
+}
+
+void Window_setBorderless(Window *window, bool borderless) {
+    Window_setUndecorated(window, borderless ? WINDOW_UNDECORATED_BORDERLESS : WINDOW_DECORATED);
+}
+
+bool Window_isBorderless(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return (*window).decorated == WINDOW_UNDECORATED_BORDERLESS;
+}
+
 void Window_setFloatingTrafficLights(Window *window, bool floating) {
     // ;;INTENTION("Floating traffic lights are an AppKit chrome concept; the
     // NAKED mode (WS_POPUP|WS_THICKFRAME) is the closest Win32 dialect and is

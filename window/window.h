@@ -251,6 +251,12 @@ void Window_setFullscreenButton(Window *window, bool enabled);
 
 // Switch window chrome at runtime: one of WINDOW_UNDECORATED_*.
 void Window_setUndecorated(Window *window, int type);
+void Window_setDecorated(Window *window, bool decorated);
+bool Window_isDecorated(const Window *window);
+void Window_setNaked(Window *window, bool naked);
+bool Window_isNaked(const Window *window);
+void Window_setBorderless(Window *window, bool borderless);
+bool Window_isBorderless(const Window *window);
 void Window_setFloatingTrafficLights(Window *window, bool floating); // Transparent titlebar, leaves just traffic lights over content
 
 // macOS-only traffic-light chrome (the Window_macOS_ infix IS the platform

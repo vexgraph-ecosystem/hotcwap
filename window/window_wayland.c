@@ -1683,6 +1683,36 @@ void Window_setUndecorated(Window *window, int type) {
     (*window).decorated = (type == WINDOW_DECORATED);
 }
 
+void Window_setDecorated(Window *window, bool decorated) {
+    Window_setUndecorated(window, decorated ? WINDOW_DECORATED : WINDOW_UNDECORATED_BORDERLESS);
+}
+
+bool Window_isDecorated(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return (*window).decorated;
+}
+
+void Window_setNaked(Window *window, bool naked) {
+    Window_setUndecorated(window, naked ? WINDOW_UNDECORATED_NAKED : WINDOW_DECORATED);
+}
+
+bool Window_isNaked(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return !(*window).decorated;
+}
+
+void Window_setBorderless(Window *window, bool borderless) {
+    Window_setUndecorated(window, borderless ? WINDOW_UNDECORATED_BORDERLESS : WINDOW_DECORATED);
+}
+
+bool Window_isBorderless(const Window *window) {
+    if (window == nullptr)
+        return false;
+    return !(*window).decorated;
+}
+
 void Window_setFloatingTrafficLights(Window *window, bool floating) {
     (void) window;
     (void) floating;

@@ -309,6 +309,33 @@ void Window_setUndecorated(Window *window, int mode) {
     (void) mode;
 }
 
+void Window_setDecorated(Window *window, bool decorated) {
+    Window_setUndecorated(window, decorated ? WINDOW_DECORATED : WINDOW_UNDECORATED_BORDERLESS);
+}
+
+bool Window_isDecorated(const Window *window) {
+    (void) window;
+    return true;
+}
+
+void Window_setNaked(Window *window, bool naked) {
+    Window_setUndecorated(window, naked ? WINDOW_UNDECORATED_NAKED : WINDOW_DECORATED);
+}
+
+bool Window_isNaked(const Window *window) {
+    (void) window;
+    return false;
+}
+
+void Window_setBorderless(Window *window, bool borderless) {
+    Window_setUndecorated(window, borderless ? WINDOW_UNDECORATED_BORDERLESS : WINDOW_DECORATED);
+}
+
+bool Window_isBorderless(const Window *window) {
+    (void) window;
+    return false;
+}
+
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32: needs a Mac to mean anything.
 void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLight light, bool visible) {
     (void) window;
