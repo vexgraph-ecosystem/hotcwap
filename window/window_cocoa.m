@@ -25,6 +25,7 @@
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <QuartzCore/QuartzCore.h>
 #import <stdatomic.h>
 #include <math.h>
 
@@ -1115,9 +1116,51 @@ uint64_t Window_renderGeneration(const Window *window) {
 
 // --- Graphics board slots (stored + ordered; rendering lives elsewhere) -----
 
-// ;;INTENTION("orderLayers on the fresh window is a pure no-op — the window no longer parents render layers; the still-unmigrated darling compositor retains the call. It retires with the composite seam.")
+// The 2-VkImage System Layer Stacking:
+// Visual stack: NSWindow -> NSVisualEffectView (blur) -> bottomLayer (scenepane VkImage) -> topLayer (contentpane VkImage).
+// CoreAnimation transaction brackets with actions disabled guarantee zero tearing and zero gap during live resize.
 void Window_orderLayers(Window *window) {
-    (void) window;
+    if (window == nullptr || (*window).nsWindow == nil)
+        return;
+
+    @autoreleasepool {
+        NSView *contentView = [(*window).nsWindow contentView];
+        if (contentView == nil)
+            return;
+
+        CALayer *rootLayer = [contentView layer];
+        if (rootLayer == nil)
+            return;
+
+        void *bPtr = atomic_load_explicit(&(*window).bottomLayer, memory_order_acquire);
+        void *tPtr = atomic_load_explicit(&(*window).topLayer, memory_order_acquire);
+        CALayer *bottom = bPtr ? (__bridge CALayer*) bPtr : nil;
+        CALayer *top = tPtr ? (__bridge CALayer*) tPtr : nil;
+
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        // Bottom layer (scene board): parents below topLayer
+        if (bottom != nil) {
+            if ([bottom superlayer] != rootLayer)
+                [rootLayer addSublayer:bottom];
+            [bottom setFrame:[contentView bounds]];
+        }
+
+        // Top layer (content board): parents at top of visual hierarchy
+        if (top != nil) {
+            if ([top superlayer] != rootLayer)
+                [rootLayer addSublayer:top];
+            [top setFrame:[contentView bounds]];
+        }
+
+        // Order: ensure bottom is below top if both present
+        if (bottom != nil && top != nil && [bottom superlayer] == rootLayer && [top superlayer] == rootLayer) {
+            [rootLayer insertSublayer:bottom below:top];
+        }
+
+        [CATransaction commit];
+    }
 }
 
 void Window_setBottomLayer(Window *window, void *layer) {

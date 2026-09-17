@@ -568,16 +568,25 @@ bool Kernel_runConsole(Kernel *self, Console *c) {
     return c ? Console_run(c) : false;
 }
 
+// External demand-driven graphics loop seam (graphvex GfxLoop_runApplication).
+// Declared weak so hotcwap compiles and links independently in headless / standalone targets.
+#if defined(__APPLE__) || defined(__linux__)
+extern int GfxLoop_runApplication(void *app) __attribute__((weak));
+#else
+extern int GfxLoop_runApplication(void *app);
+#endif
+
 int Kernel_runApplication(Kernel *self, Application *a) {
     if (!self || !a)
         return KERNEL_EXIT_NO_APPS;
     kernelStartApplication(self, a);
 
-    // Keep the app alive on its own: the blocking Application_run parked loop
-    // (hotcwap's own, graphvex-independent) lives until EVERY window is
-    // closed, then returns. graphvex's GfxLoop frame scheduler lands later
-    // and layers on top of this keep-alive — the Kernel never owns the loop
-    // either way.
+    // If graphvex's GfxLoop is linked, hand the application to the demand-driven
+    // frame scheduler loop. Otherwise, fall back to hotcwap's parked loop.
+    if (GfxLoop_runApplication != nullptr) {
+        return GfxLoop_runApplication(a);
+    }
+
     Application_run(a);
     return KERNEL_EXIT_OK;
 }
