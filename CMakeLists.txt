@@ -168,7 +168,7 @@ elseif(UNIX)
 endif()
 endif() # NOT TARGET hotcwap
 
-set(HOTCWAP_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../_tests/hotcwap")
+set(HOTCWAP_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/hotcwap")
 if(NOT EXISTS "${HOTCWAP_TEST_DIR}")
     set(HOTCWAP_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 endif()
@@ -246,12 +246,11 @@ endif()
 
 # Inert pixel-seam contract test (docs/bridging.md #3): pins the safe
 # defaults (false/nullptr/no-op) of every function hotcwap keeps inert by
-# design. In-repo (tests/) so it is tracked — unlike the umbrella _tests/
-# scratch dir. Links hotcwap for the per-OS backend; vexspoke input symbols
+# design. Links hotcwap for the per-OS backend; vexspoke input symbols
 # resolve transitively in-tree exactly like window_test.
-if(NOT TARGET bridge_seam_test AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/bridge_seam_test.c")
+if(NOT TARGET bridge_seam_test AND EXISTS "${HOTCWAP_TEST_DIR}/bridge_seam_test.c")
     add_executable(bridge_seam_test
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/bridge_seam_test.c
+        ${HOTCWAP_TEST_DIR}/bridge_seam_test.c
     )
     target_include_directories(bridge_seam_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(bridge_seam_test PRIVATE -Wall -Wextra -Werror)

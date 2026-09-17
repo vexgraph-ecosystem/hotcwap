@@ -95,7 +95,6 @@ target_link_libraries(my_app PRIVATE hotcwap)
 * **`window/window_win32.c`** — Lean Windows Win32 draft backend (1:1 cocoa mirror; the production candidate, with `window.c` kept as the legacy safe-default stub via `-DHOTCWAP_WIN32_LEGACY=ON` — `;;DRAFT`, needs a Windows host to compile).
 * **`hot/hot.h/.c`** — Dynamic module reloader: `dlopen`/`dlsym` lifecycle wrappers and runtime state preservation.
 * **`hot/manifest.h/.c`** — The `MANIFEST(...)` install-layout authority (the "manifest binary way"): the install tree plus the `manifest.json` library catalog the downloader edits. `MANIFEST(kind, org, app)` resolves `<application-data>/<org>/<app>` once; `MANIFEST_LIBRARY(...)` registers library KEYS; `MANIFEST_UPDATE(library, payloadDir)` fail-closes undeclared payload sections and stages `bin/new/<library>`; `MANIFEST_PROMOTE()` slides each library's generations — the MODE-2 cold-swap ladder beneath the MODE-1 `Hot_poll` hot swap. See `docs/install.md`.
-* **`main/test_suite.c`** (umbrella root) & **`_tests/hotcwap/`** — Verification harnesses: `spoke_test`, `window_event_test`, `window_test` for spoke bridging, event dispatch, window creation, and dynamic library swapping; `manifest_hot_test` for the real generation ladder swap, and `manifest_rollback_test` for #8.5 automated state rollback (a foreign-magic module rejected, old generation preserved, self-heal on the next good promote).
 
 ---
 

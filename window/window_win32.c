@@ -98,9 +98,6 @@
  *   _Atomic int presentMode;        // present pacing (FIFO/IMMEDIATE), pure state
  *   _Atomic bool transparent;       // composite transparency request, pure state
  *   _Atomic uint64_t renderGeneration; // policy-reflection counter (rebuild ticket)
- *   _Atomic(Panel*) container;      // content root slot (nullptr = nothing to draw)
- *   _Atomic(Panel*) contentPanel;   // UI tree slot (graphvex/darling consume)
- *   _Atomic(Panel*) scenePanel;     // scene tree slot (graphvex/darling consume)
  *   _Atomic(void*) topLayer;        // content board handle (owned by the render repo)
  *   _Atomic(void*) bottomLayer;     // scene board handle (owned by the render repo)
  *   _Atomic bool enabled;           // false mutes ALL OS input for this window
@@ -163,7 +160,6 @@
  *   - Window_setLocation(window, x, y)      : SetWindowPos (top-left px)
  *   - Window_center(window)
  *   - Window_show(window) / Window_hide(window) / Window_setVisible(window, v)
- *   - Window_setContainer/ContentPanel/ScenePanel(window, panel)
  *   - Window_setTopLayer/BottomLayer(window, layer)
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)   : WS_EX_LAYERED
@@ -195,7 +191,6 @@
  * Getters:
  *   - Window_getLocation(window, outX, outY)
  *   - Window_getContentOrigin(window, outX, outY)
- *   - Window_getContainer/ContentPanel/ScenePanel(window)
  *   - Window_getTopLayer/BottomLayer(window)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
@@ -306,11 +301,8 @@ struct Window {
     _Atomic bool transparent;
     _Atomic uint64_t renderGeneration;
 
-    // Content / board slots — opaque Panel* and layer handles consumed by
-    // graphvex/darling; this window stores them, never dereferences them.
-    _Atomic(Panel*) container;
-    _Atomic(Panel*) contentPanel;
-    _Atomic(Panel*) scenePanel;
+    // Board slots — opaque layer handles consumed by graphvex/darling; this
+    // window stores them, never dereferences them. Panels live on the Frame.
     _Atomic(void*) topLayer;
     _Atomic(void*) bottomLayer;
 
@@ -1048,7 +1040,6 @@ static Window *windowAlloc(const WindowDesc *desc) {
     atomic_store_explicit(&(*w).presentMode, WINDOW_PRESENT_FIFO, memory_order_relaxed);
     atomic_store_explicit(&(*w).transparent, false, memory_order_relaxed);
     atomic_store_explicit(&(*w).renderGeneration, 0, memory_order_relaxed);
-    atomic_store_explicit(&(*w).container, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*w).topLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*w).bottomLayer, nullptr, memory_order_relaxed);
     atomic_store_explicit(&(*w).enabled, true, memory_order_relaxed);
@@ -1192,38 +1183,6 @@ bool Window_isTransparent(const Window *window) {
 
 uint64_t Window_renderGeneration(const Window *window) {
     return window ? atomic_load_explicit(&(*window).renderGeneration, memory_order_acquire) : 0;
-}
-
-// --- Content slots (opaque Panel* / layer handles; no rendering here) -------
-
-void Window_setContainer(Window *window, Panel *root) {
-    if (window == nullptr)
-        return;
-    atomic_store_explicit(&(*window).container, root, memory_order_release);
-}
-
-Panel *Window_getContainer(const Window *window) {
-    return window ? atomic_load_explicit(&(*window).container, memory_order_acquire) : nullptr;
-}
-
-void Window_setContentPanel(Window *window, Panel *panel) {
-    if (window == nullptr)
-        return;
-    atomic_store_explicit(&(*window).contentPanel, panel, memory_order_release);
-}
-
-Panel *Window_getContentPanel(const Window *window) {
-    return window ? atomic_load_explicit(&(*window).contentPanel, memory_order_acquire) : nullptr;
-}
-
-void Window_setScenePanel(Window *window, Panel *panel) {
-    if (window == nullptr)
-        return;
-    atomic_store_explicit(&(*window).scenePanel, panel, memory_order_release);
-}
-
-Panel *Window_getScenePanel(const Window *window) {
-    return window ? atomic_load_explicit(&(*window).scenePanel, memory_order_acquire) : nullptr;
 }
 
 // --- Graphics board slots (stored + ordered; rendering lives elsewhere) -----

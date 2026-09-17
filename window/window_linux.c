@@ -47,7 +47,6 @@
  * Setters:
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)
- *   - Window_setContainer(window, root)
  *   - Window_setEnabled(window, enabled)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
@@ -69,7 +68,6 @@
  * Getters:
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
- *   - Window_getContainer(window)
  *   - Window_isEnabled(window)
  *   - Window_getContentOrigin(window, outX, outY)
  *   - Window_getMonitorId(window)
@@ -144,17 +142,6 @@ bool Window_isTransparent(const Window *window) {
 uint64_t Window_renderGeneration(const Window *window) {
     (void) window;
     return 0;
-}
-
-;;INCOMPLETE // Content root slot; no-op until implemented.
-void Window_setContainer(Window *window, Panel *root) {
-    (void) window;
-    (void) root;
-}
-
-Panel *Window_getContainer(const Window *window) {
-    (void) window;
-    return nullptr;
 }
 
 ;;INCOMPLETE // Input kill switch; no-op until implemented.

@@ -128,36 +128,15 @@ void Window_show(Window *window);
 void Window_hide(Window *window);
 void Window_setVisible(Window *window, bool visible);
 
-// --- Content: the ONE container slot ------------------------------------------
+// --- Content: owned by Frame, never by the Window ---------------------------
 //
-// The root is a Panel (the basket); the game panel, UI panels, everything
-// nests UNDER it via Panel_addContainer — the scene3d is just a child like
-// any other. The basket MIRRORS the window: its width/height are rewritten
-// to the window's content size whenever the window resizes (size-generation
-// reflection), so percentage layouts and edge anchors inside it track the
-// real window without anyone forwarding sizes by hand.
-//
-// Setting nullptr detaches content and the renderer falls back to a clear-only
-// pass — nothing is displayed. The renderer re-reads this pointer every frame
-// (relaxed atomic), so swaps land on the next presented frame.
-// Two-layer split architecture:
-//   - contentPanel: the UI tree (board-backed, child panes composited by AppKit)
-//   - scenePanel: the scene tree (Vulkan swapchain-backed)
-// DECOUPLING LAW: a window with NEITHER panel attached is a bare AppKit window.
-// Vulkan is not booted, no swapchain is created, and no present worker runs —
-// the window resizes natively and draws nothing. Vulkan comes online (per
-// Kernel_runAll) only once a contentPanel or scenePanel is attached.
-
-void   Window_setContainer(Window *window, Panel *root);
-Panel *Window_getContainer(const Window *window);
-
-// Set the content panel (the UI tree, composited natively via CALayers).
-void   Window_setContentPanel(Window *window, Panel *panel);
-Panel *Window_getContentPanel(const Window *window);
-
-// Set the scene panel (the Vulkan-rendered scene tree stamped on the swapchain).
-void   Window_setScenePanel(Window *window, Panel *panel);
-Panel *Window_getScenePanel(const Window *window);
+// The Window Decoupling Law: a Window is a dumb surface + callback bridge —
+// it holds zero Panels. The Frame owns the two board roots (contentPane =
+// upper UI canvas, scenePane = bottom backdrop, both borrowed and nullable,
+// set via Frame_setContentPane / Frame_setScenePane) and hands explicit
+// Panel* arguments to the pane-bridge calls below. A bare window with no
+// borrower stays a plain AppKit window: Vulkan boots only once a borrower
+// attaches a render surface through graphvex.
 
 // --- Graphics boards: opaque platform layers owned by graphvex -------------
 //
@@ -204,7 +183,7 @@ void Window_compositeBoards(Window *window);
 // and rebuilds targets on drift (same reflection contract as resize).
 //
 // NOTE: there is deliberately NO background color here. Color is content —
-// it lives on the container panel hung in Window_setContainer, and the
+// it lives on the Frame-owned board panels, and the
 // renderer clears its monitor cache to that panel's color. Unset panel
 // color (PANEL_COLOR_CLEAR) means transparent across the board.
 
