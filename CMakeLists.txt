@@ -263,6 +263,12 @@ if(NOT TARGET process_test AND EXISTS "${HOTCWAP_TEST_DIR}/process_test.c")
     target_link_libraries(process_test PRIVATE hotcwap)
 endif()
 
+if(NOT TARGET kernel_lifecycle_test AND EXISTS "${HOTCWAP_TEST_DIR}/kernel_lifecycle_test.c")
+    add_executable(kernel_lifecycle_test ${HOTCWAP_TEST_DIR}/kernel_lifecycle_test.c)
+    target_compile_options(kernel_lifecycle_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(kernel_lifecycle_test PRIVATE hotcwap)
+endif()
+
 if(NOT TARGET kernel_function_test AND EXISTS "${HOTCWAP_TEST_DIR}/kernel_function_test.c")
     add_executable(kernel_function_test
         ${HOTCWAP_TEST_DIR}/kernel_function_test.c

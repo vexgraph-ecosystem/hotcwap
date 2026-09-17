@@ -44,6 +44,7 @@
  *   uint32_t endCount;
  *   uint32_t endCap;
  *   _Atomic bool endHooksFired;                  // fire-once guard for end functions
+ *   atomic_uint phase;                           // KernelPhase: READY/RUNNING/DRAINING
  *   atomic_bool running;                          // terminal-run armed flag
  *   atomic_uintptr_t runThreadId;                 // arming (Thread 0) id; 0 = never armed
  *   pthread_mutex_t addLock;                      // guards the mailbox fields below
@@ -156,6 +157,7 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     (*self).endCount = 0;
     (*self).endCap = 0;
     atomic_store_explicit(&(*self).endHooksFired, false, memory_order_relaxed);
+    atomic_store_explicit(&(*self).phase, KERNEL_PHASE_READY, memory_order_relaxed);
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
     pthread_mutex_init(&(*self).addLock, NULL);
@@ -173,14 +175,20 @@ static void *kernelRunWorkerMain(void *arg);
 bool Kernel_free(Kernel *self) {
     if (!self)
         return false;
+    if (atomic_load_explicit(&(*self).phase, memory_order_acquire) != KERNEL_PHASE_READY) {
+        fprintf(stderr, "kernel: refusing free while a run is live or draining — stop and let it quiesce first\n");
+        return false;
+    }
     if ((*self).applicationCount > 0 || (*self).processCount > 0 || (*self).consoleCount > 0) {
         fprintf(stderr,
                 "kernel: %u app(s), %u process(es), %u console(s) still registered; remove before free\n",
                 (*self).applicationCount, (*self).processCount, (*self).consoleCount);
         return false;
     }
-    Kernel_stop(self);
-
+    // Fire end hooks BEFORE joining? No — AFTER: hooks release resources the
+    // workers may still touch, so quiescence precedes release (the Teardown
+    // Order Law). In READY phase no workers exist; Kernel_stop already fired
+    // the hooks in that path and the fire-once guard keeps this a no-op.
     // Join any run worker threads
     for (uint32_t i = 0; i < (*self).runCount; i++) {
         KernelRunSlot *slot = &(*self).runSlots[i];
@@ -189,6 +197,8 @@ bool Kernel_free(Kernel *self) {
             atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
         }
     }
+    kernelFireEndHooks(self);
+
     free((*self).runSlots);
     (*self).runSlots = NULL;
     (*self).runCount = 0;
@@ -238,22 +248,40 @@ void Kernel_destroy(Kernel *self) {
 void Kernel_stop(Kernel *self) {
     if (!self)
         return;
-    // Ends a live Kernel_runAll immediately: the reactor loop re-checks
-    // running each pass and exits. Clearing running FIRST (before the app/
-    // console stop passes below) races nothing — the loop is the only reader
-    // and it reads running on the arming thread.
-    atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
-    for (uint32_t i = 0; i < (*self).applicationCount; i++) {
-        Application *app = (*self).applications[i];
-        if (app)
-            Application_stop(app);
+    // LIVE RUN: claim teardown ownership once (RUNNING -> DRAINING). The
+    // winner stops the kinds and clears running so the reactor exits; the
+    // ARMING THREAD then joins the workers and fires the end hooks in its
+    // epilogue — never here, because hooks may release resources the workers
+    // still touch (the Teardown Order Law: quiescence precedes release).
+    uint32_t expected = KERNEL_PHASE_RUNNING;
+    if (atomic_compare_exchange_strong_explicit(&(*self).phase, &expected, KERNEL_PHASE_DRAINING,
+                                                memory_order_acq_rel, memory_order_acquire)) {
+        atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+        for (uint32_t i = 0; i < (*self).applicationCount; i++) {
+            Application *app = (*self).applications[i];
+            if (app)
+                Application_stop(app);
+        }
+        for (uint32_t i = 0; i < (*self).consoleCount; i++) {
+            Console *c = (*self).consoles[i];
+            if (c)
+                Console_cancel(c);
+        }
+        return;
     }
-    for (uint32_t i = 0; i < (*self).consoleCount; i++) {
-        Console *c = (*self).consoles[i];
-        if (c)
-            Console_cancel(c);
+    // NO RUN LIVE (READY): nothing to quiesce — fire the end hooks directly
+    // (the fire-once guard keeps repeated stops harmless).
+    if (expected == KERNEL_PHASE_READY) {
+        kernelFireEndHooks(self);
+        return;
     }
-    kernelFireEndHooks(self);
+    // DRAINING: the arming thread already owns teardown; nothing to do.
+}
+
+KernelPhase Kernel_getPhase(const Kernel *self) {
+    if (!self)
+        return KERNEL_PHASE_READY;
+    return (KernelPhase) atomic_load_explicit(&(*self).phase, memory_order_acquire);
 }
 
 bool Kernel_isRunning(const Kernel *self) {
@@ -295,7 +323,14 @@ static void *kernelRunWorkerMain(void *arg) {
 // Tier-1 thread-safety half of the ;;INTENTION above.
 
 static bool kernelRunActive(const Kernel *self) {
-    return atomic_load_explicit(&(*self).running, memory_order_relaxed);
+    return atomic_load_explicit(&(*self).phase, memory_order_acquire) != KERNEL_PHASE_READY;
+}
+
+// DRAINING is owned by the arming thread: no registration from any thread,
+// and nothing may grow a registry/slot table a joining worker still points
+// into. Callers already warn on refusal.
+static bool kernelDraining(const Kernel *self) {
+    return atomic_load_explicit(&(*self).phase, memory_order_acquire) == KERNEL_PHASE_DRAINING;
 }
 
 // Forward: start one app manifest non-blocking (defined below with the run
@@ -406,6 +441,25 @@ static void kernelDrainDeferred(Kernel *self) {
         free(batch);
 }
 
+// Teardown counterpart of the drain: steal the pending batch and DISCARD it.
+// The run ended (stop landed or all kinds done) — starting fresh work now
+// would outlive the stop, and DRAINING refuses new posts anyway, so anything
+// left was queued while RUNNING and never admitted. One warn per drop batch.
+static void kernelDropDeferred(Kernel *self) {
+    pthread_mutex_lock(&(*self).addLock);
+    KernelDeferred *batch = (*self).deferred;
+    size_t n = (*self).deferredCount;
+    (*self).deferred = NULL;
+    (*self).deferredCount = 0;
+    (*self).deferredCap = 0;
+    pthread_mutex_unlock(&(*self).addLock);
+
+    if (n > 0)
+        fprintf(stderr, "kernel: dropped %zu deferred add(s) — the run ended before admission\n", n);
+    if (batch)
+        free(batch);
+}
+
 // Every registered kind reports done? Processes are done by construction
 // after the initial invoke pass (one-shot); consoles when their session
 // joined (Console_isRunning false); apps per the Application_isFinished
@@ -460,9 +514,16 @@ int Kernel_runAll(Kernel *self) {
     if ((*self).applicationCount == 0 && (*self).processCount == 0 && (*self).consoleCount == 0 && (*self).runCount == 0)
         return KERNEL_EXIT_NO_APPS;
 
-    // TERMINAL-RUN ARM: from here the arming (Thread 0) thread can no longer
-    // register — all Kernel_add* on it are refused; other threads post into
-    // the deferred mailbox, drained on the next pass below.
+    // TERMINAL-RUN ARM: claim the run (READY -> RUNNING). From here the
+    // arming (Thread 0) thread can no longer register — all Kernel_add* on it
+    // are refused; other threads post into the deferred mailbox, drained on
+    // the next pass below. A second concurrent runAll is refused (one warn).
+    uint32_t readyPhase = KERNEL_PHASE_READY;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).phase, &readyPhase, KERNEL_PHASE_RUNNING,
+                                                 memory_order_acq_rel, memory_order_acquire)) {
+        fprintf(stderr, "kernel: Kernel_run refused — a run is already live or draining\n");
+        return KERNEL_EXIT_NO_APPS;
+    }
     atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) pthread_self(), memory_order_relaxed);
 
@@ -537,10 +598,14 @@ int Kernel_runAll(Kernel *self) {
         pass++;
     }
 
-    // Reactor exit: stop every kind still live so nothing outlives the run
-    // (mirrors Kernel_stop minus the external cancel), then best-effort-drain
-    // straggler deferred adds so the mailbox is empty, join run worker threads,
-    // fire end functions, then disarm.
+    // Reactor exit: the arming thread owns teardown. It stops every kind
+    // still live, JOINS the run workers (quiescence first), then fires the
+    // end functions — hooks release resources workers may still touch, so
+    // they run only after the last join (the Teardown Order Law). While
+    // DRAINING, Kernel_add* stays closed on every thread: no registration
+    // can grow a registry a joining worker still points into. The final
+    // drain is a best-effort straggler sweep; admitted adds run like the
+    // initial pass would. Then the phase returns to READY.
     for (uint32_t i = 0; i < (*self).applicationCount; i++) {
         Application *a = (*self).applications[i];
         if (a && Application_isRunning(a))
@@ -553,11 +618,12 @@ int Kernel_runAll(Kernel *self) {
             atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
         }
     }
-    kernelDrainDeferred(self);
     kernelFireEndHooks(self);
+    kernelDropDeferred(self);
 
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+    atomic_store_explicit(&(*self).phase, KERNEL_PHASE_READY, memory_order_release);
 
     return rc;
 }
@@ -607,6 +673,10 @@ int Kernel_runApplication(Kernel *self, Application *a) {
 bool Kernel_addApplication(Kernel *self, Application *app) {
     if (!self || !app)
         return false;
+    if (kernelDraining(self)) {
+        fprintf(stderr, "kernel: Kernel_addApplication refused while draining\n");
+        return false;
+    }
     if (kernelRunActive(self)) {
         if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
             fprintf(stderr, "kernel: Kernel_addApplication refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
@@ -634,6 +704,10 @@ bool Kernel_removeApplication(Kernel *self, Application *app) {
 bool Kernel_addProcess(Kernel *self, Process *p) {
     if (!self || !p)
         return false;
+    if (kernelDraining(self)) {
+        fprintf(stderr, "kernel: Kernel_addProcess refused while draining\n");
+        return false;
+    }
     if (kernelRunActive(self)) {
         if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
             fprintf(stderr, "kernel: Kernel_addProcess refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
@@ -661,6 +735,10 @@ bool Kernel_removeProcess(Kernel *self, Process *p) {
 bool Kernel_addConsole(Kernel *self, Console *c) {
     if (!self || !c)
         return false;
+    if (kernelDraining(self)) {
+        fprintf(stderr, "kernel: Kernel_addConsole refused while draining\n");
+        return false;
+    }
     if (kernelRunActive(self)) {
         if ((uintptr_t) pthread_self() == atomic_load_explicit(&(*self).runThreadId, memory_order_relaxed)) {
             fprintf(stderr, "kernel: Kernel_addConsole refused on the arming thread while Kernel_run is live — register before Kernel_run(), or post from another thread\n");
@@ -689,7 +767,7 @@ bool Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata) {
     if (!self || !fn)
         return false;
     if (kernelRunActive(self)) {
-        fprintf(stderr, "kernel: Kernel_addRunFunction refused while Kernel_run is live\n");
+        fprintf(stderr, "kernel: Kernel_addRunFunction refused while a run is live or draining — worker slots must never grow under a joined thread\n");
         return false;
     }
     if ((*self).runCount >= (*self).runCap) {
@@ -711,6 +789,10 @@ bool Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata) {
 bool Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata) {
     if (!self || !fn)
         return false;
+    if (kernelRunActive(self)) {
+        fprintf(stderr, "kernel: Kernel_addEndFunction refused while a run is live or draining — end slots must never grow under a firing loop\n");
+        return false;
+    }
     if ((*self).endCount >= (*self).endCap) {
         uint32_t newCap = (*self).endCap ? (*self).endCap * 2 : 4;
         KernelEndSlot *newSlots = (KernelEndSlot*) realloc((*self).endSlots, newCap * sizeof(KernelEndSlot));

@@ -70,6 +70,19 @@
 // Use Process_run directly to distinguish admission status from callback codes.
 #define KERNEL_EXIT_PROCESS_FAILED -2
 
+// Kernel lifecycle phases (the stop/end/free split):
+//   READY    — no run live; registration and end-hook firing allowed.
+//   RUNNING  — a Kernel_runAll reactor is live on the arming thread.
+//   DRAINING — a stop landed; the arming thread owns teardown: it stops the
+//              kinds, joins every run worker, drains the mailbox, fires the
+//              end hooks, then returns to READY. No registration and no
+//              end-hook firing from any other thread while DRAINING.
+typedef enum KernelPhase {
+    KERNEL_PHASE_READY = 0,
+    KERNEL_PHASE_RUNNING,
+    KERNEL_PHASE_DRAINING
+} KernelPhase;
+
 typedef struct Kernel Kernel;
 
 // Deferred-add mailbox slot (KERNEL-KINDS-DEFERRED PRIVATE HELPER sub-record —
@@ -129,6 +142,7 @@ struct Kernel {
     uint32_t endCount;
     uint32_t endCap;
     _Atomic bool endHooksFired;                  // fire-once guard for end functions
+    atomic_uint phase;                           // KernelPhase: READY/RUNNING/DRAINING
 
     // --- Terminal-run guard (wired by the Kernel_run* arming code) ---
     atomic_bool running;                         // true only while a Kernel_run* is live
@@ -178,10 +192,18 @@ bool Kernel_free(Kernel *self);
 void Kernel_destroy(Kernel *self);
 
 // --- Supervisor state ---
-// Ends a live Kernel_run* run immediately: stops every registered app,
-// cancels every console session (SIGTERM + cancel flag), clears running, and
-// idles the run loop. Safe to call from any thread while the run is live.
+// Ends a live Kernel_runAll run: transitions RUNNING -> DRAINING, stops every
+// registered app, cancels every console session (SIGTERM + cancel flag), and
+// clears running so the reactor exits. Teardown ownership stays with the
+// arming thread: it joins the run workers, drains the mailbox, fires the end
+// hooks, and only then returns to READY. Called while READY (no run live) it
+// fires the end hooks directly (fire-once). Called while DRAINING it is a
+// no-op — the arming thread already owns teardown. Safe from any thread.
 void Kernel_stop(Kernel *self);
+
+// Current lifecycle phase (KernelPhase). Snapshot semantics: DRAINING may
+// already have returned to READY by the time the caller acts on it.
+KernelPhase Kernel_getPhase(const Kernel *self);
 
 // True while a Kernel_run* entry is currently live on some thread (armed and
 // not yet disarmed). False before the first run and after Kernel_stop/run
