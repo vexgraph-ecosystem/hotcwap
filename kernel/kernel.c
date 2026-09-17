@@ -646,10 +646,23 @@ bool Kernel_runConsole(Kernel *self, Console *c) {
 // External demand-driven graphics loop seam (graphvex GfxLoop_runApplication).
 // Declared weak so hotcwap compiles and links independently in headless / standalone targets.
 #if defined(__APPLE__) || defined(__linux__)
-extern int GfxLoop_runApplication(void *app) __attribute__((weak));
+extern int GfxLoop_runApplication(void *context, bool (*continueFn)(void *), void (*pollFn)(void)) __attribute__((weak));
 #else
-extern int GfxLoop_runApplication(void *app);
+extern int GfxLoop_runApplication(void *context, bool (*continueFn)(void *), void (*pollFn)(void));
 #endif
+
+// R1's half of the GfxLoop lifecycle contract (the Vertical Integration Law:
+// the Kernel never names Vk_* and graphvex never mirrors a Kernel/Application
+// layout). Completion predicate + per-pass servicing: the loop keeps running
+// until every window closes, and each ask doubles as the generation-driven
+// hot-reload poll (cheap generation compare at frame cadence).
+static bool kernelGfxAppContinues(void *context) {
+    Application *a = (Application*) context;
+    if (!a)
+        return false;
+    Application_pollHot(a);
+    return !Application_isFinished(a);
+}
 
 int Kernel_runApplication(Kernel *self, Application *a) {
     if (!self || !a)
@@ -657,9 +670,11 @@ int Kernel_runApplication(Kernel *self, Application *a) {
     kernelStartApplication(self, a);
 
     // If graphvex's GfxLoop is linked, hand the application to the demand-driven
-    // frame scheduler loop. Otherwise, fall back to hotcwap's parked loop.
+    // frame scheduler loop: completion + hot servicing stay HERE (R1), the
+    // frame loop + Thread-0 event pump stay THERE (R3). Otherwise, fall back
+    // to hotcwap's parked loop.
     if (GfxLoop_runApplication != nullptr) {
-        return GfxLoop_runApplication(a);
+        return GfxLoop_runApplication(a, kernelGfxAppContinues, Window_pollEvents);
     }
 
     Application_run(a);
