@@ -86,6 +86,25 @@ typedef struct KernelDeferred {
     void *ptr;                // Application* / Process* / Console* (as void*)
 } KernelDeferred;
 
+// Run function signature: runs on its own supervised worker thread during Kernel_runAll
+typedef void (*KernelRunFn)(void *userdata);
+
+// End function signature: invoked when Kernel_runAll completes or on Kernel_stop
+typedef void (*KernelEndFn)(Kernel *self, void *userdata);
+
+typedef struct KernelRunSlot {
+    KernelRunFn fn;
+    void *userdata;
+    pthread_t thread;
+    _Atomic bool threadLaunched;
+    _Atomic bool done;
+} KernelRunSlot;
+
+typedef struct KernelEndSlot {
+    KernelEndFn fn;
+    void *userdata;
+} KernelEndSlot;
+
 struct Kernel {
     Lifetime lifetime;                     // Lifetime memory substrate (master + transient arenas)
     void *arena;                           // opaque master arena (provider-attested, never dereferenced)
@@ -98,6 +117,15 @@ struct Kernel {
     uint32_t processCount;                       // used slots in processes[]
     Console     *consoles[KERNEL_MAX_CONSOLES];  // session pumps
     uint32_t consoleCount;                       // used slots in consoles[]
+
+    // --- Dynamic run-function and end-function registries ---
+    KernelRunSlot *runSlots;                     // growable supervised run worker slots
+    uint32_t runCount;
+    uint32_t runCap;
+    KernelEndSlot *endSlots;                     // growable lifecycle completion hooks
+    uint32_t endCount;
+    uint32_t endCap;
+    _Atomic bool endHooksFired;                  // fire-once guard for end functions
 
     // --- Terminal-run guard (wired by the Kernel_run* arming code) ---
     atomic_bool running;                         // true only while a Kernel_run* is live
@@ -229,6 +257,12 @@ bool    Kernel_removeConsole(Kernel *self, Console *c);
 Console *Kernel_getConsole(const Kernel *self, uint32_t index);
 uint32_t Kernel_getConsoleCount(const Kernel *self);
 uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap);
+
+// --- Run functions (async background execution) & End functions (lifecycle completion) ---
+bool     Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata);
+bool     Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata);
+uint32_t Kernel_getRunFunctionCount(const Kernel *self);
+uint32_t Kernel_getEndFunctionCount(const Kernel *self);
 
 // --- Arena access (the Symmetric Getter/Setter Completeness Law symmetric getters) ---
 void *Kernel_getArena(const Kernel *self);

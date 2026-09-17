@@ -256,3 +256,13 @@ if(NOT TARGET bridge_seam_test AND EXISTS "${HOTCWAP_TEST_DIR}/bridge_seam_test.
     target_compile_options(bridge_seam_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(bridge_seam_test PRIVATE hotcwap)
 endif()
+
+if(NOT TARGET kernel_function_test AND EXISTS "${HOTCWAP_TEST_DIR}/kernel_function_test.c")
+    add_executable(kernel_function_test
+        ${HOTCWAP_TEST_DIR}/kernel_function_test.c
+    )
+    target_include_directories(kernel_function_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(kernel_function_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(kernel_function_test PRIVATE hotcwap)
+endif()
+

@@ -37,6 +37,13 @@
  *   uint32_t processCount;                       // used slots in processes[]
  *   Console     *consoles[KERNEL_MAX_CONSOLES];  // session pumps
  *   uint32_t consoleCount;                       // used slots in consoles[]
+ *   KernelRunSlot *runSlots;                     // growable supervised run worker slots
+ *   uint32_t runCount;
+ *   uint32_t runCap;
+ *   KernelEndSlot *endSlots;                     // growable lifecycle completion hooks
+ *   uint32_t endCount;
+ *   uint32_t endCap;
+ *   _Atomic bool endHooksFired;                  // fire-once guard for end functions
  *   atomic_bool running;                          // terminal-run armed flag
  *   atomic_uintptr_t runThreadId;                 // arming (Thread 0) id; 0 = never armed
  *   pthread_mutex_t addLock;                      // guards the mailbox fields below
@@ -65,10 +72,10 @@
  * Core Functions:
  *   - Kernel_destroy(self)   : legacy shim over free
  *   - Kernel_free(self)
- *   - Kernel_stop(self)      : stop apps, cancel consoles, clear running
+ *   - Kernel_stop(self)      : stop apps, cancel consoles, invoke end functions, clear running
  *   - Kernel_isRunning(self) : terminal-run armed?
  *   - Kernel_runAll(self)    : completion reactor (arm -> dispatch -> supervise
- *                              -> drain deferred -> disarm)
+ *                              -> drain deferred -> invoke end functions -> disarm)
  *   - Kernel_runProcess(self, p)     : forward to Process_run
  *   - Kernel_runConsole(self, c)     : forward to Console_run
  *   - Kernel_runApplication(self, a) : start + forward to graphvex GfxLoop
@@ -77,10 +84,13 @@
  *     Terminal-Run Contract: armed-thread refusal + off-thread mailbox post)
  *   - Kernel_addProcess / removeProcess / getters
  *   - Kernel_addConsole / removeConsole / getters
+ *   - Kernel_addRunFunction / Kernel_addEndFunction / getters
  *
  * Getters:
  *   - Kernel_getArena(self)
  *   - Kernel_getTransientArena(self)
+ *   - Kernel_getRunFunctionCount(self)
+ *   - Kernel_getEndFunctionCount(self)
  * ============================================================================
  */
 
@@ -139,6 +149,13 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     (*self).applicationCount = 0;
     (*self).processCount = 0;
     (*self).consoleCount = 0;
+    (*self).runSlots = NULL;
+    (*self).runCount = 0;
+    (*self).runCap = 0;
+    (*self).endSlots = NULL;
+    (*self).endCount = 0;
+    (*self).endCap = 0;
+    atomic_store_explicit(&(*self).endHooksFired, false, memory_order_relaxed);
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
     pthread_mutex_init(&(*self).addLock, NULL);
@@ -147,6 +164,10 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     (*self).deferredCap = 0;
     return self;
 }
+
+// Forward declare hook invoker
+static void kernelFireEndHooks(Kernel *self);
+static void *kernelRunWorkerMain(void *arg);
 
 // CORE FUNCTIONS
 bool Kernel_free(Kernel *self) {
@@ -159,6 +180,24 @@ bool Kernel_free(Kernel *self) {
         return false;
     }
     Kernel_stop(self);
+
+    // Join any run worker threads
+    for (uint32_t i = 0; i < (*self).runCount; i++) {
+        KernelRunSlot *slot = &(*self).runSlots[i];
+        if (atomic_load_explicit(&(*slot).threadLaunched, memory_order_relaxed)) {
+            pthread_join((*slot).thread, NULL);
+            atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
+        }
+    }
+    free((*self).runSlots);
+    (*self).runSlots = NULL;
+    (*self).runCount = 0;
+    (*self).runCap = 0;
+
+    free((*self).endSlots);
+    (*self).endSlots = NULL;
+    (*self).endCount = 0;
+    (*self).endCap = 0;
 
     // No Vulkan teardown here: the device lifecycle (init/shutdown) is owned
     // entirely by graphvex and driven through its own registration path.
@@ -214,12 +253,37 @@ void Kernel_stop(Kernel *self) {
         if (c)
             Console_cancel(c);
     }
+    kernelFireEndHooks(self);
 }
 
 bool Kernel_isRunning(const Kernel *self) {
     if (!self)
         return false;
     return atomic_load_explicit(&(*self).running, memory_order_relaxed);
+}
+
+static void kernelFireEndHooks(Kernel *self) {
+    if (!self)
+        return;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).endHooksFired, &expected, true, memory_order_relaxed, memory_order_relaxed))
+        return;
+    for (uint32_t i = 0; i < (*self).endCount; i++) {
+        KernelEndSlot *slot = &(*self).endSlots[i];
+        if ((*slot).fn)
+            (*slot).fn(self, (*slot).userdata);
+    }
+}
+
+static void *kernelRunWorkerMain(void *arg) {
+    KernelRunSlot *slot = (KernelRunSlot*) arg;
+    if (slot && (*slot).fn) {
+        (*slot).fn((*slot).userdata);
+    }
+    if (slot) {
+        atomic_store_explicit(&(*slot).done, true, memory_order_relaxed);
+    }
+    return NULL;
 }
 
 // --- REGISTRY INTERNALS + DEFERRED MAILBOX -----------------------------------
@@ -355,6 +419,11 @@ static bool kernelAllDone(const Kernel *self) {
         if (c && Console_isRunning(c))
             return false;
     }
+    for (uint32_t i = 0; i < (*self).runCount; i++) {
+        const KernelRunSlot *slot = &(*self).runSlots[i];
+        if (!atomic_load_explicit(&(*slot).done, memory_order_relaxed))
+            return false;
+    }
     return true;
 }
 
@@ -386,7 +455,7 @@ static void kernelStartApplication(Kernel *self, Application *a) {
 int Kernel_runAll(Kernel *self) {
     if (!self)
         return KERNEL_EXIT_NO_APPS;
-    if ((*self).applicationCount == 0 && (*self).processCount == 0 && (*self).consoleCount == 0)
+    if ((*self).applicationCount == 0 && (*self).processCount == 0 && (*self).consoleCount == 0 && (*self).runCount == 0)
         return KERNEL_EXIT_NO_APPS;
 
     // TERMINAL-RUN ARM: from here the arming (Thread 0) thread can no longer
@@ -404,6 +473,17 @@ int Kernel_runAll(Kernel *self) {
             int r = Process_run(p, 0, nullptr);
             if (r != 0 && rc == KERNEL_EXIT_OK)
                 rc = r;
+        }
+    }
+
+    // Launch supervised run worker threads
+    for (uint32_t i = 0; i < (*self).runCount; i++) {
+        KernelRunSlot *slot = &(*self).runSlots[i];
+        atomic_store_explicit(&(*slot).done, false, memory_order_relaxed);
+        if (pthread_create(&(*slot).thread, NULL, kernelRunWorkerMain, slot) == 0) {
+            atomic_store_explicit(&(*slot).threadLaunched, true, memory_order_relaxed);
+        } else {
+            atomic_store_explicit(&(*slot).done, true, memory_order_relaxed);
         }
     }
 
@@ -455,13 +535,22 @@ int Kernel_runAll(Kernel *self) {
 
     // Reactor exit: stop every kind still live so nothing outlives the run
     // (mirrors Kernel_stop minus the external cancel), then best-effort-drain
-    // straggler deferred adds so the mailbox is empty, then disarm.
+    // straggler deferred adds so the mailbox is empty, join run worker threads,
+    // fire end functions, then disarm.
     for (uint32_t i = 0; i < (*self).applicationCount; i++) {
         Application *a = (*self).applications[i];
         if (a && Application_isRunning(a))
             Application_stop(a);
     }
+    for (uint32_t i = 0; i < (*self).runCount; i++) {
+        KernelRunSlot *slot = &(*self).runSlots[i];
+        if (atomic_load_explicit(&(*slot).threadLaunched, memory_order_relaxed)) {
+            pthread_join((*slot).thread, NULL);
+            atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
+        }
+    }
     kernelDrainDeferred(self);
+    kernelFireEndHooks(self);
 
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
@@ -575,6 +664,59 @@ bool Kernel_removeConsole(Kernel *self, Console *c) {
         }
     }
     return false;
+}
+
+// --- RUN FUNCTIONS & END FUNCTIONS ---
+bool Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata) {
+    if (!self || !fn)
+        return false;
+    if (kernelRunActive(self)) {
+        fprintf(stderr, "kernel: Kernel_addRunFunction refused while Kernel_run is live\n");
+        return false;
+    }
+    if ((*self).runCount >= (*self).runCap) {
+        uint32_t newCap = (*self).runCap ? (*self).runCap * 2 : 4;
+        KernelRunSlot *newSlots = (KernelRunSlot*) realloc((*self).runSlots, newCap * sizeof(KernelRunSlot));
+        if (!newSlots)
+            return false;
+        (*self).runSlots = newSlots;
+        (*self).runCap = newCap;
+    }
+    KernelRunSlot *slot = &(*self).runSlots[(*self).runCount++];
+    (*slot).fn = fn;
+    (*slot).userdata = userdata;
+    atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
+    atomic_store_explicit(&(*slot).done, false, memory_order_relaxed);
+    return true;
+}
+
+bool Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata) {
+    if (!self || !fn)
+        return false;
+    if ((*self).endCount >= (*self).endCap) {
+        uint32_t newCap = (*self).endCap ? (*self).endCap * 2 : 4;
+        KernelEndSlot *newSlots = (KernelEndSlot*) realloc((*self).endSlots, newCap * sizeof(KernelEndSlot));
+        if (!newSlots)
+            return false;
+        (*self).endSlots = newSlots;
+        (*self).endCap = newCap;
+    }
+    KernelEndSlot *slot = &(*self).endSlots[(*self).endCount++];
+    (*slot).fn = fn;
+    (*slot).userdata = userdata;
+    return true;
+}
+
+uint32_t Kernel_getRunFunctionCount(const Kernel *self) {
+    if (!self)
+        return 0;
+    return (*self).runCount;
+}
+
+uint32_t Kernel_getEndFunctionCount(const Kernel *self) {
+    if (!self)
+        return 0;
+    return (*self).endCount;
 }
 
 // GETTERS
