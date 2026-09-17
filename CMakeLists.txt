@@ -257,6 +257,12 @@ if(NOT TARGET bridge_seam_test AND EXISTS "${HOTCWAP_TEST_DIR}/bridge_seam_test.
     target_link_libraries(bridge_seam_test PRIVATE hotcwap)
 endif()
 
+if(NOT TARGET process_test AND EXISTS "${HOTCWAP_TEST_DIR}/process_test.c")
+    add_executable(process_test ${HOTCWAP_TEST_DIR}/process_test.c)
+    target_compile_options(process_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(process_test PRIVATE hotcwap)
+endif()
+
 if(NOT TARGET kernel_function_test AND EXISTS "${HOTCWAP_TEST_DIR}/kernel_function_test.c")
     add_executable(kernel_function_test
         ${HOTCWAP_TEST_DIR}/kernel_function_test.c

@@ -66,6 +66,9 @@
 // Process exit codes returned by the Kernel_run dispatch entry.
 #define KERNEL_EXIT_OK 0
 #define KERNEL_EXIT_NO_APPS -1
+// Kernel's legacy int return surface maps Process admission failure to -2.
+// Use Process_run directly to distinguish admission status from callback codes.
+#define KERNEL_EXIT_PROCESS_FAILED -2
 
 typedef struct Kernel Kernel;
 

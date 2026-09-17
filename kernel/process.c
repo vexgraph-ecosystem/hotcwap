@@ -1,137 +1,143 @@
-#include "process.h"
+#include "kernel/process.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <stdatomic.h>
 
-#include "annotation/intention.h"
 #include "annotation/overview.h"
 
 ;;OVERVIEW
 /**
- * ============================================================================
  * CLASS: Process (kernel/process.c)
- * LEVEL: L2 — Behavior (one-shot hot-loadable function wrapper)
- * ============================================================================
- * A Process wraps a single `main`-shaped entry: invoke, run to completion,
- * exit status, re-runnable. The hot module is retired (not unloaded) while a
- * call is in flight. One Process = one function; never ticked, never owns a
- * window, a thread, or a socket.
+ * LEVEL: L2 — Behavior (one replaceable caller-thread entry)
  *
- * STRUCT FIELDS (Mirroring kernel/process.h — exactly this file's class):
- * ----------------------------------------------------------------------------
- *   ProcessEntry entry;             // hot-bound entry fn (null = unbound)
- *   void *hot;                      // opaque retire pin (the Conflict Triage Law seam)
- *   _Atomic bool inFlight;          // re-entrancy guard (one invoke at a time)
- *   uint32_t invocationCount;       // completed invocations
+ * STRUCT FIELDS (kernel/process.h):
+ *   _Atomic(ProcessEntry) entry;   // current callback
+ *   _Atomic(void*) context;       // borrowed callback data
+ *   _Atomic(void*) hot;           // borrowed association, NOT a module pin
+ *   _Atomic(const char*) name;    // borrowed immutable label
+ *   atomic_bool occupied;        // non-waiting admission gate
+ *   atomic_bool inFlight;        // callback execution telemetry
+ *   atomic_uint invocationCount; // completed callbacks
  *
- * PRIVATE HELPERS: None.
+ * CONSTRUCTORS: Process(entry), Process(entry, context),
+ *   Process(name, entry, context) dispatch to Process_1 / Process_2 / Process_3.
+ * CORE: Process_run(self, exitStatus), Process_free(self).
+ * SETTERS: Process_replace(self, entry, context, hot), Process_setName(self, name).
+ * GETTERS: Process_getEntry, Process_getContext, Process_getHot, Process_getName,
+ *   Process_isRunning, Process_getInvocationCount.
+ * PRIVATE HELPERS: none.
  *
- * FUNCTION REGISTRY:
- * ----------------------------------------------------------------------------
- * Constructors:
- *   - Process(entry)                        : Process_1(entry)
- *
- * Core Functions:
- *   - Process_run(self, argc, argv)         : invoke entry; returns exit status
- *   - Process_isRunning(self)
- *   - Process_getInvocationCount(self)
- *   - Process_free(self)                    : refused while inFlight (the Teardown Order Law)
- *
- * Setters:
- *   - Process_setEntry(self, entry)         : no-op while inFlight
- *   - Process_setHot(self, pin)
- *
- * Getters:
- *   - Process_getEntry(self)
- *   - Process_getHot(self)
- * ============================================================================
+ * Run and replacement claim the same gate once, never spin or wait. Failed
+ * admission leaves output/binding unchanged. Entry/context/hot mutate together
+ * under the gate; individual getters are atomic observations, not a snapshot.
+ * Binding setters are deliberately combined to preserve their relationship.
+ * Telemetry is read-only. Null entry is rejected; null context/name/hot allowed.
+ * Borrowed storage/code outlives its uses; external exclusion is required at
+ * free. Callbacks must return normally (no longjmp/thread exit across this API).
+ * Generation pinning and unloading remain a loader integration task.
  */
-
-// ;;INTENTION("Retire-pin lifecycle: when hot/hot.h retire handle is wired,
-// Process_run pins the module before calling entry and retires after entry
-// returns — the old module rides the retire ring until the call completes,
-// and Process_setHot rebinds the entry on the next Process_run. Wire to
-// HotModule / HotRetireRing via the existing hot_retire_handle seam.")
 
 // CONSTRUCTORS
 Process *Process_1(ProcessEntry entry) {
+    return Process_3(nullptr, entry, nullptr);
+}
+
+Process *Process_2(ProcessEntry entry, void *context) {
+    return Process_3(nullptr, entry, context);
+}
+
+Process *Process_3(const char *name, ProcessEntry entry, void *context) {
+    if (!entry)
+        return nullptr;
     Process *self = (Process*) calloc(1, sizeof(Process));
     if (!self)
-        return NULL;
-    (*self).entry = entry;
-    (*self).hot = nullptr;
+        return nullptr;
+    atomic_init(&(*self).entry, entry);
+    atomic_init(&(*self).context, context);
+    atomic_init(&(*self).hot, nullptr);
+    atomic_init(&(*self).name, name);
+    atomic_init(&(*self).occupied, false);
     atomic_init(&(*self).inFlight, false);
-    (*self).invocationCount = 0;
+    atomic_init(&(*self).invocationCount, 0);
     return self;
 }
 
 // CORE FUNCTIONS
-int Process_run(Process *self, int argc, const char *const *argv) {
-    if (!self)
-        return -1;
-    if (atomic_load_explicit(&(*self).inFlight, memory_order_acquire))
-        return -1;
-    ProcessEntry fn = (*self).entry;
-    if (!fn)
-        return -1;
-
+ProcessResult Process_run(Process *self, int *exitStatus) {
+    if (!self || !exitStatus)
+        return PROCESS_INVALID;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).occupied, &expected, true,
+                                                 memory_order_acquire, memory_order_relaxed))
+        return PROCESS_BUSY;
+    ProcessEntry entry = atomic_load_explicit(&(*self).entry, memory_order_relaxed);
+    void *context = atomic_load_explicit(&(*self).context, memory_order_relaxed);
     atomic_store_explicit(&(*self).inFlight, true, memory_order_release);
-    int status = fn(argc, argv);
+    *exitStatus = (*entry)(context);
+    atomic_fetch_add_explicit(&(*self).invocationCount, 1, memory_order_relaxed);
     atomic_store_explicit(&(*self).inFlight, false, memory_order_release);
-    (*self).invocationCount++;
-    return status;
+    atomic_store_explicit(&(*self).occupied, false, memory_order_release);
+    return PROCESS_OK;
 }
 
-bool Process_isRunning(const Process *self) {
+bool Process_free(Process *self) {
     if (!self)
         return false;
-    return atomic_load_explicit(&(*self).inFlight, memory_order_acquire);
-}
-
-uint32_t Process_getInvocationCount(const Process *self) {
-    if (!self)
-        return 0;
-    return (*self).invocationCount;
-}
-
-void Process_free(Process *self) {
-    if (!self)
-        return;
-    if (atomic_load_explicit(&(*self).inFlight, memory_order_acquire)) {
-        fprintf(stderr, "process: refusing free while call is in flight\n");
-        return;
-    }
-    (*self).entry = nullptr;
-    (*self).hot = nullptr;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).occupied, &expected, true,
+                                                 memory_order_acquire, memory_order_relaxed))
+        return false;
     free(self);
+    return true;
 }
 
 // SETTERS
-void Process_setEntry(Process *self, ProcessEntry entry) {
-    if (!self)
-        return;
-    if (atomic_load_explicit(&(*self).inFlight, memory_order_acquire))
-        return;
-    (*self).entry = entry;
+ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, void *hot) {
+    if (!self || !entry)
+        return PROCESS_INVALID;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).occupied, &expected, true,
+                                                 memory_order_acquire, memory_order_relaxed))
+        return PROCESS_BUSY;
+    atomic_store_explicit(&(*self).entry, entry, memory_order_relaxed);
+    atomic_store_explicit(&(*self).context, context, memory_order_relaxed);
+    atomic_store_explicit(&(*self).hot, hot, memory_order_relaxed);
+    atomic_store_explicit(&(*self).occupied, false, memory_order_release);
+    return PROCESS_OK;
 }
 
-void Process_setHot(Process *self, void *pin) {
+ProcessResult Process_setName(Process *self, const char *name) {
     if (!self)
-        return;
-    (*self).hot = pin;
+        return PROCESS_INVALID;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&(*self).occupied, &expected, true,
+                                                 memory_order_acquire, memory_order_relaxed))
+        return PROCESS_BUSY;
+    atomic_store_explicit(&(*self).name, name, memory_order_relaxed);
+    atomic_store_explicit(&(*self).occupied, false, memory_order_release);
+    return PROCESS_OK;
 }
 
 // GETTERS
+bool Process_isRunning(const Process *self) {
+    return self ? atomic_load_explicit(&(*self).inFlight, memory_order_acquire) : false;
+}
+
+uint32_t Process_getInvocationCount(const Process *self) {
+    return self ? atomic_load_explicit(&(*self).invocationCount, memory_order_relaxed) : 0;
+}
+
 ProcessEntry Process_getEntry(const Process *self) {
-    if (!self)
-        return nullptr;
-    return (*self).entry;
+    return self ? atomic_load_explicit(&(*self).entry, memory_order_relaxed) : nullptr;
+}
+
+void *Process_getContext(const Process *self) {
+    return self ? atomic_load_explicit(&(*self).context, memory_order_relaxed) : nullptr;
 }
 
 void *Process_getHot(const Process *self) {
-    if (!self)
-        return nullptr;
-    return (*self).hot;
+    return self ? atomic_load_explicit(&(*self).hot, memory_order_relaxed) : nullptr;
+}
+
+const char *Process_getName(const Process *self) {
+    return self ? atomic_load_explicit(&(*self).name, memory_order_relaxed) : nullptr;
 }

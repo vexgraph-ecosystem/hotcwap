@@ -370,8 +370,10 @@ static void kernelApplyDeferred(Kernel *self, KernelDeferredKind kind, void *ptr
         }
         case KERNEL_DEFERRED_PROCESS: {
             Process *p = (Process*) ptr;
-            if (kernelAddProcessInternal(self, p))
-                (void) Process_run(p, 0, nullptr);
+            if (kernelAddProcessInternal(self, p)) {
+                int exitStatus = 0;
+                (void) Process_run(p, &exitStatus);
+            }
             break;
         }
         case KERNEL_DEFERRED_CONSOLE: {
@@ -470,7 +472,9 @@ int Kernel_runAll(Kernel *self) {
     for (uint32_t i = 0; i < (*self).processCount; i++) {
         Process *p = (*self).processes[i];
         if (p) {
-            int r = Process_run(p, 0, nullptr);
+            int r = 0;
+            if (Process_run(p, &r) != PROCESS_OK)
+                r = KERNEL_EXIT_PROCESS_FAILED;
             if (r != 0 && rc == KERNEL_EXIT_OK)
                 rc = r;
         }
@@ -560,7 +564,12 @@ int Kernel_runAll(Kernel *self) {
 
 int Kernel_runProcess(Kernel *self, Process *p) {
     (void) self;
-    return p ? Process_run(p, 0, nullptr) : KERNEL_EXIT_NO_APPS;
+    if (!p)
+        return KERNEL_EXIT_NO_APPS;
+    int exitStatus = 0;
+    if (Process_run(p, &exitStatus) != PROCESS_OK)
+        return KERNEL_EXIT_PROCESS_FAILED;
+    return exitStatus;
 }
 
 bool Kernel_runConsole(Kernel *self, Console *c) {

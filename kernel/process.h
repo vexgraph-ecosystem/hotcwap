@@ -5,61 +5,55 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// kernel/process.h — One-shot hot-loadable function wrapper.
-//
-// A Process wraps a single `main`-shaped entry (ProcessEntry): invoke it
-// on the caller's thread, it runs to completion, returns an exit status.
-// Re-runnable ("run it back"); the hot module is retired (not unloaded) while
-// a call is in flight (the Conflict Triage Law).
-//
-// Lifecycle:
-//   Process(entry) -> Process_run(self, argc, argv) -> Process_run(...) -> Process_free
-//
-// Never ticked.  Never owns a window, a thread, or a socket.
+// One caller-thread invocation at a time. Name, context and hot association
+// are borrowed; code and data must remain live while referenced. No module
+// pin, thread or cancellation mechanism is created here. Before free,
+// deregister and externally exclude ALL concurrent API callers.
+typedef int (*ProcessEntry)(void *context);
 
-typedef struct Process Process;
+typedef enum ProcessResult {
+    PROCESS_OK = 0,
+    PROCESS_INVALID,
+    PROCESS_BUSY
+} ProcessResult;
 
-typedef int (*ProcessEntry)(int argc, const char *const *argv);
+typedef struct Process {
+    _Atomic(ProcessEntry) entry;
+    _Atomic(void*) context;
+    _Atomic(void*) hot;             // association only, NOT a loader pin
+    _Atomic(const char*) name;
+    atomic_bool occupied;          // admission for run, replace, mutation, free
+    atomic_bool inFlight;          // callback execution telemetry
+    atomic_uint invocationCount;   // completed callbacks
+} Process;
 
-struct Process {
-    ProcessEntry entry;             // hot-bound entry fn (null = unbound)
-    void *hot;                      // opaque retire pin (the Conflict Triage Law; set after hot-load)
-    _Atomic bool inFlight;          // re-entrancy guard (one invoke at a time)
-    uint32_t invocationCount;       // completed invocations
-};
-
-// --- Overloaded constructors ---
-//
-//   Process(entry)  -> one-shot fn wrapper
-//
+// Null entries fail construction; null context/name are allowed.
 Process *Process_1(ProcessEntry entry);
+Process *Process_2(ProcessEntry entry, void *context);
+Process *Process_3(const char *name, ProcessEntry entry, void *context);
 
-#define PROCESS_CHOOSER(_0, _1, NAME, ...) NAME
+#define PROCESS_CHOOSER(_1, _2, _3, NAME, ...) NAME
+#define Process(...) PROCESS_CHOOSER(__VA_ARGS__, Process_3, Process_2, Process_1)(__VA_ARGS__)
 
-#define Process(...) PROCESS_CHOOSER( \
-    dummy __VA_OPT__(,) __VA_ARGS__, \
-    Process_1 \
-)(__VA_ARGS__)
+// Admission status is separate from callback result (Dest-Last Law).
+// exitStatus is required and untouched on failure. No waiting or allocation.
+ProcessResult Process_run(Process *self, int *exitStatus);
 
-// Free the Process. Refused (warn + return) while a call is in flight
-// (the Teardown Order Law / the Cold-Strict, Hot-Minimal Validation Law). Null-safe.
-void Process_free(Process *self);
+// Replace the entire binding between calls; hot may be null for unmanaged code.
+// Busy/invalid leaves the old binding intact. Does not free data or unload code.
+ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, void *hot);
+ProcessResult Process_setName(Process *self, const char *name);
 
-// --- Core ---
-// Invoke the wrapped entry on the caller's thread. Returns the entry's
-// exit status, or -1 on null self / null entry / re-entrant call (the Cold-Strict, Hot-Minimal Validation Law).
-int  Process_run(Process *self, int argc, const char *const *argv);
-
+// False on null/busy. Exclude new users before attempting free.
+bool Process_free(Process *self);
 bool Process_isRunning(const Process *self);
 uint32_t Process_getInvocationCount(const Process *self);
 
-// --- Setters / Getters (the Symmetric Getter/Setter Completeness Law, the Living `;;OVERVIEW` Blueprint Law contract) ---
-// setEntry: no-op while inFlight. getEntry: null-safe (returns null).
-void        Process_setEntry(Process *self, ProcessEntry entry);
+// Individual atomic observations, NOT a coherent multi-field snapshot or
+// permission to call/unload entry. Invoke exclusively via Process_run.
 ProcessEntry Process_getEntry(const Process *self);
-
-// Hot module pin (void* — no hot.h include; wiring via the Conflict Triage Law seam).
-void  Process_setHot(Process *self, void *pin);
+void *Process_getContext(const Process *self);
 void *Process_getHot(const Process *self);
+const char *Process_getName(const Process *self);
 
 #endif
