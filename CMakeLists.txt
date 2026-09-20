@@ -278,3 +278,12 @@ if(NOT TARGET kernel_function_test AND EXISTS "${HOTCWAP_TEST_DIR}/kernel_functi
     target_link_libraries(kernel_function_test PRIVATE hotcwap)
 endif()
 
+if(NOT TARGET manifest_uninstall_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_uninstall_test.c")
+    add_executable(manifest_uninstall_test
+        ${HOTCWAP_TEST_DIR}/manifest_uninstall_test.c
+    )
+    target_include_directories(manifest_uninstall_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(manifest_uninstall_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(manifest_uninstall_test PRIVATE hotcwap)
+endif()
+

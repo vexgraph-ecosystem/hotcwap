@@ -20,8 +20,28 @@
 #  define UNLINK(a)    unlink(a)
 #endif
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/intention.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: ManifestPath
+ * ============================================================================
+ * Authority for on-disk application installation layouts, catalog reflection, and
+ * multi-generation hot-reload binary ladders. Establishes the filesystem structure
+ * under platform-standard application-data paths, locking the installation root
+ * and managing the manifest.json catalog.
+ *
+ * Implements the atomic generation slide across ladder directories (backward, previous,
+ * current, new). The monotonic generation stamp (bin/current/<lib>.generation) drives
+ * in-process dynamic module reloading, guaranteeing fail-closed updates and seamless
+ * rollback capabilities without runtime file locking contention.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -29,16 +49,17 @@
  * CLASS: ManifestPath (hot/manifest.c)
  * LEVEL: L4 — Self-Management (owns the per-app install layout on disk)
  * ============================================================================
- * The MANIFEST(...) install-layout authority — the "manifest binary way".
- * The manifest IS the on-disk install tree PLUS the manifest.json library
- * catalog. MANIFEST(...) resolves <application-base>/<org>/<app> from the
- * platform application-data base, locks it once, and seeds manifest.json
- * ({name, version, org, libraries{}}) when absent. MANIFEST_LIBRARY(...)
- * registers the hosted library KEYS (empty section lists — the downloader
- * owns the arrays). The ladder holds ONE generation set PER LIBRARY and the
- * verbs verify against the DECLARED section lists fail-closed: MANIFEST_UPDATE
- * stages into bin/new/<library>, MANIFEST_PROMOTE slides each library's
- * generations, MANIFEST_REFLECT seeds a library's sections on first-run.
+ * SUMMARY:
+ *   The MANIFEST(...) install-layout authority — the "manifest binary way".
+ *   The manifest IS the on-disk install tree PLUS the manifest.json library
+ *   catalog. MANIFEST(...) resolves <application-base>/<org>/<app> from the
+ *   platform application-data base, locks it once, and seeds manifest.json
+ *   ({name, version, org, libraries{}}) when absent. MANIFEST_LIBRARY(...)
+ *   registers the hosted library KEYS (empty section lists — the downloader
+ *   owns the arrays). The ladder holds ONE generation set PER LIBRARY and the
+ *   verbs verify against the DECLARED section lists fail-closed: MANIFEST_UPDATE
+ *   stages into bin/new/<library>, MANIFEST_PROMOTE slides each library's
+ *   generations, MANIFEST_REFLECT seeds a library's sections on first-run.
  *
  * STRUCT FIELDS (Mirroring hot/manifest.h — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -59,59 +80,67 @@
  *        char sections[HOT_MANIFEST_MAX_SECTIONS][HOT_MANIFEST_MAX_NAME];
  *   static uint32_t g_libraryCount;   // catalog rows in use
  *   static JsonIn   { const char *p; const char *end; }    // bounded cursor
- *   static bool   valid_name(const char *name);            // path-safe key
- *   static bool   dir_exists(const char *path);
- *   static bool   file_exists(const char *path);
- *   static bool   dir_mkdir(const char *path);        // mkdir one level
- *   static bool   mkdir_p(const char *path);          // mkdir whole tree
- *   static bool   read_file(const char *path, char *buf, size_t cap, size_t *len);
- *   static bool   resolve_base(char *out, size_t cap, ManifestRoot kind);
- *   static bool   copy_file(const char *src, const char *dst);
- *   static bool   copy_tree(const char *srcDir, const char *dstDir, int depth);
- *   static void   remove_ladder_dir(const char *dir); // recursive rm via rename+globe
- *   static bool   stem_of(const char *file, char *out, size_t cap);
- *   static bool   library_declares(const ManifestLibrary *lib, const char *stem);
- *   static ManifestLibrary *catalog_lookup(const char *name);
- *   static ManifestLibrary *catalog_ensure(const char *name);
- *   static uint64_t generation_read(const char *path);   // base-10, 0 on miss
- *   static bool   generation_write(const char *path, uint64_t value); // tmp+rename
- *   static bool   json_ws(JsonIn *self);
- *   static bool   json_eat(JsonIn *self, char expect);
- *   static bool   json_peek(JsonIn *self, char *c);
- *   static bool   json_string(JsonIn *self, char *out, size_t cap);
- *   static bool   json_skip_string(JsonIn *self);
- *   static bool   json_skip(JsonIn *self, int depth);
- *   static bool   catalog_parse_libraries(JsonIn *self);
- *   static bool   catalog_apply(JsonIn *self);
- *   static bool   catalog_write_json(void);
- *   static bool   catalog_seed(void);
- *   static bool   catalog_save(void);
- *   static bool   catalog_load(void);
- *   static bool   stage_has_content(const char *dir);
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
- *   - ManifestPath(dest, cap)                 : ManifestPath_0(dest, cap)
- *   - MANIFEST(kind, org, app)                : one-shot init + seed catalog
- * Core Functions:
- *   - MANIFEST_ROOT()
- *   - MANIFEST_ENSURE()
- *   - MANIFEST_REFLECT(library, sourceDir)
- *   - MANIFEST_UPDATE(library, payloadDir)
- *   - MANIFEST_PROMOTE()                     // slide + bump current generations
- *   - MANIFEST_IS_FIRST_RUN()
- * Path Builders:
- *   - ManifestPath_begin(self, kind)
- *   - ManifestPath_push(self, segment, create)
- *   - ManifestPath_ladderDir(slot, dest, cap, create)
- *   - ManifestPath_libraryDir(slot, library, dest, cap, create)
- *   - ManifestPath_generationFile(library, dest, cap)
- *   - ManifestPath_cacheDir(dest, cap)
- *   - ManifestPath_manifestJson(dest, cap)
- * Getters:
- *   - ManifestPath_get(const self)
- *   - ManifestPath_len(const self)
+ * Public Constructors: (.h)
+ *   - ManifestPath_0(dest, cap)               : Bind builder to buffer
+ *   - Manifest_init(first, ...)               : ONE-TIME initializer (MANIFEST macro)
+ *   - Manifest_uninstall(first, ...)          : Complete uninstall (UNINSTALL macro)
+ *
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
+ *   - MANIFEST_LIBRARY(first, ...)            : Register hosted library keys
+ *   - MANIFEST_ENSURE()                       : Create complete directory ladder
+ *   - MANIFEST_REFLECT(library, sourceDir)    : First-run payload reflection
+ *   - MANIFEST_UPDATE(library, payloadDir)    : Verify and stage payload
+ *   - MANIFEST_PROMOTE()                      : Atomic generation slide
+ *   - MANIFEST_CLEAN(ladder, library)         : Clear specific ladder directory
+ *   - MANIFEST_SECTION_LIST(lib, out, cap)    : Retrieve declared section stems
+ *   - ManifestPath_append(self, segment)      : Append path component
+ *   - ManifestPath_str(self)                  : Finalize and return path string
+ *
+ * Private Core Functions: (.c static)
+ *   - valid_name(name)                        : Validate path safety
+ *   - dir_exists(path)                        : Query directory presence
+ *   - file_exists(path)                       : Query file presence
+ *   - dir_mkdir(path)                         : Single directory creation
+ *   - mkdir_p(path)                           : Recursive directory creation
+ *   - read_file(path, buf, cap, len)          : Read whole file to buffer
+ *   - resolve_base(out, cap, kind)            : Resolve system application directory
+ *   - copy_file(src, dst)                     : Byte-level file copy
+ *   - copy_tree(srcDir, dstDir, depth)        : Recursive tree copy
+ *   - remove_ladder_dir(dir)                  : Atomic directory removal
+ *   - stem_of(file, out, cap)                 : Extract stem from filename
+ *   - library_declares(lib, stem)             : Verify stem declaration
+ *   - catalog_lookup(name)                    : Lookup library in catalog
+ *   - catalog_ensure(name)                    : Add or find library in catalog
+ *   - generation_read(path)                   : Parse generation stamp
+ *   - generation_write(path, value)           : Atomic generation write
+ *   - catalog_write_json()                    : Serialize catalog to JSON
+ *   - catalog_seed()                          : Seed initial catalog structure
+ *   - catalog_save()                          : Persist catalog to disk
+ *   - catalog_load()                          : Parse catalog from disk
+ *   - stage_has_content(dir)                  : Test if staging directory is non-empty
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - MANIFEST_ROOT()                         : Get locked install root path
+ *   - MANIFEST_IS_FIRST_RUN()                 : Test if initial install
+ *   - MANIFEST_GENERATION(library)            : Query current library generation
+ *   - MANIFEST_LIBRARY_COUNT()                : Number of registered libraries
+ *   - MANIFEST_LIBRARY_NAME(index)            : Library key by index
+ *   - MANIFEST_SECTION_COUNT(library)         : Number of sections in library
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -137,6 +166,8 @@ typedef struct JsonIn {
     const char *end;
 } JsonIn;
 
+#define MANIFEST_MAX_SEGMENTS 16
+
 static char g_root[MANIFEST_BUF_CAP];
 static bool g_mounted = false;
 static char g_name[HOT_MANIFEST_MAX_NAME];
@@ -144,6 +175,8 @@ static char g_version[HOT_MANIFEST_MAX_NAME];
 static char g_org[HOT_MANIFEST_MAX_NAME];
 static ManifestLibrary g_libraries[HOT_MANIFEST_MAX_LIBRARIES];
 static uint32_t g_libraryCount = 0;
+static char g_segments[MANIFEST_MAX_SEGMENTS][HOT_MANIFEST_MAX_NAME];
+static uint32_t g_segmentCount = 0;
 
 // --- private helpers ---------------------------------------------------------
 
@@ -157,7 +190,7 @@ static bool valid_name(const char *name) {
         return false;
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char) name[i];
-        if (!(isalnum(c) || c == '-' || c == '_' || c == '.'))
+        if (!(isalnum(c) || c == '-' || c == '_' || c == '.' || c == ' '))
             return false;
     }
     return true;
@@ -278,8 +311,19 @@ static bool read_file(const char *path, char *buf, size_t cap, size_t *lenOut) {
     return ok;
 }
 
-static bool resolve_base(char *out, size_t cap, ManifestRoot kind) {
-    if (kind == MANIFEST_MAIN_DISK) {
+static bool resolve_base(char *out, size_t cap, const char *root) {
+    if (!root || *root == '\0')
+        return false;
+
+    uintptr_t val = (uintptr_t) root;
+    if (val == 0)
+        root = "/";
+    else if (val == 1)
+        root = "~";
+    else if (val == 2)
+        root = "appdata";
+
+    if (strcmp(root, "/") == 0) {
 #if defined(_WIN32)
         snprintf(out, cap, "%s", "C:");
 #else
@@ -290,33 +334,36 @@ static bool resolve_base(char *out, size_t cap, ManifestRoot kind) {
     const char *home = getenv("HOME");
     if (!home || *home == '\0')
         home = ".";
-    if (kind == MANIFEST_USER_HOME) {
+    if (strcmp(root, "~") == 0) {
         snprintf(out, cap, "%s", home);
         return true;
     }
-    // MANIFEST_APP_DATA — $VEX_MANIFEST overrides the whole base (test seam).
-    const char *override = getenv("VEX_MANIFEST");
-    if (override && *override != '\0') {
-        snprintf(out, cap, "%s", override);
+    if (strcmp(root, "appdata") == 0 || strcmp(root, APPLICATION_DATA) == 0) {
+        const char *override = getenv("VEX_MANIFEST");
+        if (override && *override != '\0') {
+            snprintf(out, cap, "%s", override);
+            return true;
+        }
+#if defined(_WIN32)
+        const char *local = getenv("LOCALAPPDATA");
+        if (local && *local != '\0')
+            snprintf(out, cap, "%s", local);
+        else {
+            const char *profile = getenv("USERPROFILE");
+            snprintf(out, cap, "%s", (profile && *profile != '\0') ? profile : home);
+        }
+#elif defined(__APPLE__)
+        snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
+#else
+        const char *xdg = getenv("XDG_DATA_HOME");
+        if (xdg && *xdg != '\0')
+            snprintf(out, cap, "%s", xdg);
+        else
+            snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
+#endif
         return true;
     }
-#if defined(_WIN32)
-    const char *local = getenv("LOCALAPPDATA");
-    if (local && *local != '\0')
-        snprintf(out, cap, "%s", local);
-    else {
-        const char *profile = getenv("USERPROFILE");
-        snprintf(out, cap, "%s", (profile && *profile != '\0') ? profile : home);
-    }
-#elif defined(__APPLE__)
-    snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
-#else
-    const char *xdg = getenv("XDG_DATA_HOME");
-    if (xdg && *xdg != '\0')
-        snprintf(out, cap, "%s", xdg);
-    else
-        snprintf(out, cap, "%s/%s", home, APPLICATION_PATH);
-#endif
+    snprintf(out, cap, "%s", root);
     return true;
 }
 
@@ -811,41 +858,133 @@ ManifestPath ManifestPath_0(char *dest, size_t cap) {
     return self;
 }
 
-bool MANIFEST(ManifestRoot kind, const char *org, const char *app) {
-    if (g_mounted)
-        return false;
-    if (!valid_name(app))
-        return false;
-    const char *orgName = (org == nullptr || *org == '\0') ? MANIFEST_ORG : org;
-    if (!valid_name(orgName))
+bool Manifest_init(const char *first, ...) {
+    if (g_mounted || first == nullptr)
         return false;
 
-    char base[MANIFEST_BUF_CAP];
-    if (!resolve_base(base, sizeof(base), kind))
+    char segments[MANIFEST_MAX_SEGMENTS][HOT_MANIFEST_MAX_NAME];
+    uint32_t segCount = 0;
+
+    uintptr_t val = (uintptr_t) first;
+    if (val == 0)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "/");
+    else if (val == 1)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "~");
+    else if (val == 2)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "appdata");
+    else
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", first);
+
+    va_list ap;
+    va_start(ap, first);
+    const char *arg = nullptr;
+    while ((arg = va_arg(ap, const char *)) != nullptr) {
+        if (segCount >= MANIFEST_MAX_SEGMENTS) {
+            va_end(ap);
+            return false;
+        }
+        if (!valid_name(arg)) {
+            va_end(ap);
+            return false;
+        }
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", arg);
+    }
+    va_end(ap);
+
+    if (segCount < 2)
         return false;
 
     ManifestPath path = ManifestPath_0(g_root, sizeof(g_root));
-    if (!ManifestPath_begin(&path, kind))
-        return false;
-    if (!ManifestPath_push(&path, orgName, true))
-        return false;
-    if (!ManifestPath_push(&path, app, true))
+    if (!ManifestPath_begin(&path, segments[0]))
         return false;
 
-    snprintf(g_name, sizeof(g_name), "%s", app);
-    snprintf(g_org, sizeof(g_org), "%s", orgName);
+    for (uint32_t i = 1; i < segCount; i++) {
+        if (!ManifestPath_push(&path, segments[i], true))
+            return false;
+    }
+
+    snprintf(g_name, sizeof(g_name), "%s", segments[segCount - 1]);
+    if (segCount >= 3)
+        snprintf(g_org, sizeof(g_org), "%s", segments[segCount - 2]);
+    else
+        snprintf(g_org, sizeof(g_org), "%s", MANIFEST_ORG);
     snprintf(g_version, sizeof(g_version), "%s", MANIFEST_VERSION_DEFAULT);
+
+    g_segmentCount = segCount;
+    for (uint32_t i = 0; i < segCount; i++)
+        snprintf(g_segments[i], sizeof(g_segments[i]), "%s", segments[i]);
 
     g_mounted = true;
     g_libraryCount = 0;
     if (!catalog_seed()) {
         g_mounted = false;
+        g_segmentCount = 0;
         return false;
     }
     if (!catalog_load()) {
         g_mounted = false;
+        g_segmentCount = 0;
         return false;
     }
+    return true;
+}
+
+bool Manifest_uninstall(const char *first, ...) {
+    if (!g_mounted || g_segmentCount == 0 || first == nullptr) {
+        fprintf(stderr, "hot: UNINSTALL refused — no manifest currently mounted\n");
+        return false;
+    }
+
+    char segments[MANIFEST_MAX_SEGMENTS][HOT_MANIFEST_MAX_NAME];
+    uint32_t segCount = 0;
+
+    uintptr_t val = (uintptr_t) first;
+    if (val == 0)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "/");
+    else if (val == 1)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "~");
+    else if (val == 2)
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", "appdata");
+    else
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", first);
+
+    va_list ap;
+    va_start(ap, first);
+    const char *arg = nullptr;
+    while ((arg = va_arg(ap, const char *)) != nullptr) {
+        if (segCount >= MANIFEST_MAX_SEGMENTS) {
+            va_end(ap);
+            fprintf(stderr, "hot: UNINSTALL refused — segment count exceeds maximum\n");
+            return false;
+        }
+        snprintf(segments[segCount++], HOT_MANIFEST_MAX_NAME, "%s", arg);
+    }
+    va_end(ap);
+
+    if (segCount != g_segmentCount) {
+        fprintf(stderr, "hot: UNINSTALL refused — segment count %u does not match manifest (%u)\n",
+                segCount, g_segmentCount);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < segCount; i++) {
+        if (strcmp(segments[i], g_segments[i]) != 0) {
+            fprintf(stderr, "hot: UNINSTALL refused — segment '%s' does not match manifest '%s'\n",
+                    segments[i], g_segments[i]);
+            return false;
+        }
+    }
+
+    remove_ladder_dir(g_root);
+
+    g_mounted = false;
+    g_root[0] = '\0';
+    g_name[0] = '\0';
+    g_org[0] = '\0';
+    g_version[0] = '\0';
+    g_libraryCount = 0;
+    g_segmentCount = 0;
+
     return true;
 }
 
@@ -1093,11 +1232,11 @@ uint64_t MANIFEST_GENERATION(const char *library) {
 
 // --- path builders -----------------------------------------------------------
 
-bool ManifestPath_begin(ManifestPath *self, ManifestRoot kind) {
+bool ManifestPath_begin(ManifestPath *self, const char *root) {
     if (self == nullptr || (*self).buf == nullptr || (*self).cap == 0)
         return false;
     char base[MANIFEST_BUF_CAP];
-    if (!resolve_base(base, sizeof(base), kind))
+    if (!resolve_base(base, sizeof(base), root))
         return false;
     snprintf((*self).buf, (*self).cap, "%s", base);
     (*self).len = strlen((*self).buf);

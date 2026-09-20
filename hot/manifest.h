@@ -90,13 +90,11 @@
 // Install fingerprint file dropped in bin/current after first-run reflection.
 #define MANIFEST_MARK ".install-mark"
 
-// OS roots (MANIFEST_MAIN_DISK / MANIFEST_USER_HOME available for custom
-// layouts; the default MANIFEST() init mounts on MANIFEST_APP_DATA).
-typedef enum ManifestRoot {
-    MANIFEST_MAIN_DISK = 0,
-    MANIFEST_USER_HOME,
-    MANIFEST_APP_DATA,
-} ManifestRoot;
+// Standard root aliases for MANIFEST()
+#define MANIFEST_MAIN_DISK   "/"
+#define MANIFEST_USER_HOME   "~"
+#define MANIFEST_APP_DATA    "appdata"
+#define APPLICATION_DATA     "appdata"
 
 // Ladder slots, oldest → newest staging. VERBS promote NEW → CURRENT;
 // CURRENT → PREVIOUS → BACKWARD keeps the rollback sets. Each slot carries
@@ -118,25 +116,26 @@ typedef struct ManifestPath {
 
 // Constructors:
 //   ManifestPath(dest, cap)           — bind a builder to a caller buffer.
-//   MANIFEST(kind, org, app)          — one-shot init + create dirs (below).
+//   MANIFEST(root, seg1, ...)         — one-shot init + create dirs (below).
 
 ManifestPath ManifestPath_0(char *dest, size_t cap);
 
 // --- CORE FUNCTIONS ----------------------------------------------------------
 
-// ONE-TIME initializer. MANIFEST(kind, org, app) resolves
-// <application-base>/<org>/<app>/... on the platform application-data root,
-// creating directories as it goes, locks the root for every MANIFEST_* verb,
-// and seeds manifest.json {name, version, org, libraries{}} when absent.
-//
-//   MANIFEST(MANIFEST_APP_DATA, "vexgraph", "semicolon")
-//   → macOS:  ~/Library/Application Support/vexgraph/semicolon
-//   → Windows: %LOCALAPPDATA%\vexgraph\semicolon
-//
-// THE SECOND CALL FAILS (returns false). The manifest initializes once —
-// two launchers must never mount the same ladder. Returns false on a
-// second call or any resolution/mkdir failure.
-bool MANIFEST(ManifestRoot kind, const char *org, const char *app);
+// Varargs string-based initializer and uninstaller implementations.
+bool Manifest_init(const char *first, ...);
+bool Manifest_uninstall(const char *first, ...);
+
+// ONE-TIME initializer. Accepts path segments as varargs:
+//   MANIFEST(APPLICATION_DATA, "vexgraph", "test suite")
+//   MANIFEST("~", "downloads", "whatever", "whateveragain")
+#define MANIFEST(...) Manifest_init(__VA_ARGS__ __VA_OPT__(,) (const char*) 0)
+
+// Complete uninstall: wipes the whole installed tree.
+// Requires passing the EXACT same varargs path segments as MANIFEST:
+//   UNINSTALL(APPLICATION_DATA, "vexgraph", "test suite")
+// If any segment differs from the mounted manifest, it fails closed (zero files deleted).
+#define UNINSTALL(...) Manifest_uninstall(__VA_ARGS__ __VA_OPT__(,) (const char*) 0)
 
 // Register the hosted library KEYS in manifest.json (creating the file's
 // libraries{} on first call). Varargs, must end with (const char*) 0:
@@ -201,7 +200,7 @@ uint64_t MANIFEST_GENERATION(const char *library);
 bool ManifestPath_push(ManifestPath *self, const char *segment, bool create);
 
 // Resolve an OS root into a builder (no mkdir — the root always exists).
-bool ManifestPath_begin(ManifestPath *self, ManifestRoot kind);
+bool ManifestPath_begin(ManifestPath *self, const char *root);
 
 // Ladder slot dir <locked root>/bin/<slot>. create=true also mkdirs it.
 bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool create);
