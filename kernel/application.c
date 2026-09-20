@@ -7,9 +7,35 @@
 #include <time.h>
 
 #include "annotation/intention.h"
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "input/key.h"
 #include "system/system.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Application
+ * ============================================================================
+ * RAISON D'ÊTRE:
+ *   The executable manifest for a running graphical application: identity
+ *   (name/author/version/icon), top-level window registry, and hot-reload slot.
+ *   Application classifies GUI executables that present pixels through a Window;
+ *   it is a pure data descriptor with zero loops, ticks, or render workers.
+ *
+ * MEMORY LAYOUT & LIFECYCLE:
+ *   Flat fixed-size buffers for strings and an array of up to 16 Window pointers.
+ *   Atomic fields ensure thread-safe telemetry (fps, frametimeUs) and running state.
+ *   Allocation is cold-path heap via calloc; windows are referenced, never owned.
+ *
+ * OPERATIONAL INVARIANTS:
+ *   - The Kernel drives the event pump and observes the running flag.
+ *   - Application_run is an opt-in parked loop blocking on window closure only.
+ *   - Frame scheduling and GPU presentation belong strictly to R3 GfxLoop.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -17,12 +43,13 @@
  * CLASS: Application (kernel/application.c)
  * LEVEL: L2 — Behavior (executable identity, window registry & hot-module slot)
  * ============================================================================
- * The manifest for a running executable: name, author, version, icon, and the
- * window registry.  Application is GUI by definition (presents pixels through
- * a Window); CLI functions are Process, TUI sessions are Console.  It is a
- * pure data object — it NEVER owns a loop, a tick, or a present worker.  The
- * Kernel (R1) drives the event pump and observes the running flag; graphvex
- * (R3) drives frame scheduling, presentation, and telemetry writes.
+ * SUMMARY:
+ *   The manifest for a running executable: name, author, version, icon, and the
+ *   window registry. Application is GUI by definition (presents pixels through
+ *   a Window); CLI functions are Process, TUI sessions are Console. It is a
+ *   pure data object — it NEVER owns a loop, a tick, or a present worker. The
+ *   Kernel (R1) drives the event pump and observes the running flag; graphvex
+ *   (R3) drives frame scheduling, presentation, and telemetry writes.
  *
  * STRUCT FIELDS (Mirroring kernel/application.h — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -52,43 +79,46 @@
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
- *   - Application()                        : Application_0()
- *   - Application(name)                    : Application_1(name)
- *   - Application(name, author, version)   : Application_3(name, author, version)
- *     First constructor ALSO runs the one-shot bootstrap (System/input/
- *     HotFile via System_initializeAll); init is the constructor's job —
- *     callers only construct then free.
+ * Public Constructors: (.h)
+ *   - Application()                            : Application_0()
+ *   - Application(name)                        : Application_1(name)
+ *   - Application(name, author, version)       : Application_3(name, author, version)
  *
- * Core Functions:
- *   - Application_init()       : one-shot bootstrap (already run by constructor)
- *   - Application_shutdown()
- *   - Application_free(self)
- *   - Application_start(self)  // flag only — Kernel drives the event pump
- *   - Application_stop(self)   // flag only
- *   - Application_isRunning(self)
- *   - Application_run(self)    // keep-alive parked loop: BLOCKS until all
- *                              //   windows close (graphvex-independent)
- *   - Application_addWindow(self, win)
- *   - Application_removeWindow(self, win)
+ * Private Constructors: (.c static)
+ *   - (none)
  *
- * Callbacks & Telemetry:
- *   - Application_onHotReload(self, fn, user)
- *   - Application_setHot(self, hot)    // opt-in hot-reload module
- *   - Application_pollHot(self)        // generation-driven swap + reload fn
+ * Public Core Functions: (.h)
+ *   - Application_init()                       : One-shot bootstrap
+ *   - Application_shutdown()                   : Teardown input/key state
+ *   - Application_free(self)                   : Release manifest memory
+ *   - Application_start(self)                  : Flag only — marks running true
+ *   - Application_stop(self)                   : Flag only — marks running false
+ *   - Application_isRunning(self)              : Queries atomic running flag
+ *   - Application_isFinished(self)             : Completion predicate for Kernel
+ *   - Application_run(self)                    : Keep-alive parked loop
+ *   - Application_pollHot(self)                : Generation-driven swap
+ *   - Application_onHotReload(self, fn, user)  : Assign hot-reload callback
+ *   - Application_addWindow(self, win)         : Register top-level window
+ *   - Application_removeWindow(self, win)      : Unregister top-level window
  *
- * Telemetry:
- *   - Application_getFps(self)             // graphvex writes, Application reads
- *   - Application_getFrametimeUs(self)
-  *   - Application_getHot(self)
-  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - appAllWindowsClosed(self)                : Test if all registered windows closed
+ *   - appParkSlice(self)                       : 250ms park in 25ms slices
+ *
+ * Public Setters: (.h)
+ *   - Application_setHot(self, hot)
  *   - Application_setName(self, name)
  *   - Application_setAuthor(self, author)
  *   - Application_setVersion(self, version)
  *   - Application_setIconPath(self, iconPath)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - Application_getFps(self)
+ *   - Application_getFrametimeUs(self)
+ *   - Application_getHot(self)
  *   - Application_getName(self)
  *   - Application_getAuthor(self)
  *   - Application_getVersion(self)
@@ -96,6 +126,9 @@
  *   - Application_getWindow(self, index)
  *   - Application_getWindowCount(self)
  *   - Application_getWindows(self, out, cap)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -152,7 +185,7 @@ static void appParkSlice(Application *self) {
     }
 }
 
-// CONSTRUCTORS
+// CONSTRUCTORS (PUBLIC & PRIVATE)
 Application *Application_0(void) {
     Application_init();
     Application *self = (Application*) calloc(1, sizeof(Application));
@@ -177,7 +210,7 @@ Application *Application_3(const char *name, const char *author, const char *ver
     return self;
 }
 
-// CORE FUNCTIONS
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 void Application_free(Application *self) {
     if (!self) return;
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
@@ -248,7 +281,6 @@ bool Application_removeWindow(Application *self, Window *win) {
     return false;
 }
 
-// CALLBACKS & TELEMETRY
 void Application_onHotReload(Application *self, AppHotReloadFn fn, void *userdata) {
     if (!self) return;
     (*self).hotReloadFn = fn;
@@ -264,81 +296,95 @@ void Application_pollHot(Application *self) {
         (*self).hotReloadFn(self, loaded, (*self).hotReloadUserdata);
 }
 
-// TELEMETRY
-uint32_t Application_getFps(const Application *self) {
-    return self ? atomic_load_explicit(&(*self).fps, memory_order_relaxed) : 0;
-}
-
-uint32_t Application_getFrametimeUs(const Application *self) {
-    return self ? atomic_load_explicit(&(*self).frametimeUs, memory_order_relaxed) : 0;
-}
-
-HotModule *Application_getHot(const Application *self) {
-    return self ? (*self).hot : nullptr;
-}
-
+// SETTERS (PUBLIC & PRIVATE)
+;;SETTER
 void Application_setHot(Application *self, HotModule *hot) {
     if (!self) return;
     (*self).hot = hot;
 }
 
-// SETTERS
+;;SETTER
 void Application_setName(Application *self, const char *name) {
     if (!self || !name) return;
     strncpy((*self).name, name, APP_MAX_NAME - 1);
     (*self).name[APP_MAX_NAME - 1] = '\0';
 }
 
+;;SETTER
 void Application_setAuthor(Application *self, const char *author) {
     if (!self || !author) return;
     strncpy((*self).author, author, APP_MAX_NAME - 1);
     (*self).author[APP_MAX_NAME - 1] = '\0';
 }
 
+;;SETTER
 void Application_setVersion(Application *self, const char *version) {
     if (!self || !version) return;
     strncpy((*self).version, version, APP_MAX_VERSION - 1);
     (*self).version[APP_MAX_VERSION - 1] = '\0';
 }
 
+;;SETTER
 void Application_setIconPath(Application *self, const char *iconPath) {
     if (!self || !iconPath) return;
     strncpy((*self).iconPath, iconPath, APP_MAX_ICON_PATH - 1);
     (*self).iconPath[APP_MAX_ICON_PATH - 1] = '\0';
 }
 
-// GETTERS
+// GETTERS (PUBLIC & PRIVATE)
+;;GETTER
+uint32_t Application_getFps(const Application *self) {
+    return self ? atomic_load_explicit(&(*self).fps, memory_order_relaxed) : 0;
+}
+
+;;GETTER
+uint32_t Application_getFrametimeUs(const Application *self) {
+    return self ? atomic_load_explicit(&(*self).frametimeUs, memory_order_relaxed) : 0;
+}
+
+;;GETTER
+HotModule *Application_getHot(const Application *self) {
+    return self ? (*self).hot : nullptr;
+}
+
+;;GETTER
 const char *Application_getName(const Application *self) {
     if (!self) return nullptr;
     return (*self).name;
 }
 
+;;GETTER
 const char *Application_getAuthor(const Application *self) {
     if (!self) return nullptr;
     return (*self).author;
 }
 
+;;GETTER
 const char *Application_getVersion(const Application *self) {
     if (!self) return nullptr;
     return (*self).version;
 }
 
+;;GETTER
 const char *Application_getIconPath(const Application *self) {
     if (!self) return nullptr;
     return (*self).iconPath;
 }
 
+;;GETTER
 Window *Application_getWindow(const Application *self, uint32_t index) {
     if (!self) return nullptr;
     if (index >= (*self).window_count) return nullptr;
     return (*self).windows[index];
 }
 
+;;GETTER
 uint32_t Application_getWindowCount(const Application *self) {
     if (!self) return 0;
     return (*self).window_count;
 }
 
+;;GETTER
 uint32_t Application_getWindows(const Application *self, Window **out, uint32_t cap) {
     if (!self || !out) return 0;
     uint32_t n = (*self).window_count;
@@ -347,3 +393,4 @@ uint32_t Application_getWindows(const Application *self, Window **out, uint32_t 
         out[i] = (*self).windows[i];
     return n;
 }
+
