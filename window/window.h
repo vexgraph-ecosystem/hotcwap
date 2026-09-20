@@ -104,6 +104,9 @@ Window *Window_create(const char *title, int width, int height);
 // Close the window and free the handle. Safe if already closed.
 void Window_destroy(Window *window);
 
+// Emergency teardown: close and free all active windows across the process.
+void Window_destroyAll(void);
+
 // True once the user has asked to close (red button / Cmd+W).
 bool Window_shouldClose(Window *window);
 void Window_setShouldClose(Window *window, bool shouldClose);
@@ -134,7 +137,7 @@ void Window_setVisible(Window *window, bool visible);
 // it holds zero Panels. The Frame owns the two board roots (contentPane =
 // upper UI canvas, scenePane = bottom backdrop, both borrowed and nullable,
 // set via Frame_setContentPane / Frame_setScenePane) and hands explicit
-// Panel* arguments to the pane-bridge calls below. A bare window with no
+// Panel* arguments to the board-attach calls below. A bare window with no
 // borrower stays a plain AppKit window: Vulkan boots only once a borrower
 // attaches a render surface through graphvex.
 
@@ -156,23 +159,21 @@ void  *Window_getTopLayer(const Window *window);
 // off-thread callers are bounced to the main queue asynchronously.
 void   Window_orderLayers(Window *window);
 
-// --- Metal pane bridge (C callable from renderer) ------------------------
+// --- Board compositing seam (inert no-op, retained for the migrating
+//     darling compositor) ----------------------------------------------------
 //
-// Scene children get Metal pane backing and AppKit composites them
-// via CALayers. These functions let the renderer attach, resize, and
-// position the CALayers for Metal-backed panels. Thread 0 only.
+// ;;INTENTION("The pane-era model (per-scene CAMetalLayer + VkPane swapchain)
+// is retired: a window owns exactly ONE on-screen Metal layer — the seam
+// canvas — and the scene/content boards are retained OFFSCREEN VkLayer
+// targets composited into it by the render repo (the Window Compositing
+// Layer Order Law + the Single-Seam Canvas Law). These four declarations
+// stay as inert no-op seams so the still-migrating darling compositor call
+// sites link; real parenting lives in the opaque layer slots below
+// (Window_setBottomLayer/setTopLayer + Window_orderLayers).")
 
 bool Window_attachPanes(Window *window, Panel *panel, int width, int height);
 bool Window_resizePanes(Window *window, Panel *panel, int width, int height);
 void Window_compositePanes(Window *window, Panel *contentPanel);
-
-// Board composite: the scene + content panels when backed as full-window
-// CAMetalLayer boards (PanelCocoa_newBoard). Parents the scene board below
-// the content board under the window's root layer at full-window frames —
-// stack: NSWindow -> board Metal -> scene Metal -> content Metal -> child
-// panes, recursively. No-op for panels without board backing (child-pane
-// scenes still composite through Window_compositePanes).
-// Thread 0 only (like all layer-tree mutation).
 void Window_compositeBoards(Window *window);
 
 // --- Present policy -----------------------------------------------------------
@@ -211,10 +212,10 @@ bool Window_isEnabled(const Window *window);
 
 // Live-resize flag: set by thread 0 while AppKit is inside an active window
 // drag (NSViewLiveResize). The renderer reads it to keep presenting the
-// current chain WITHOUT rebuilding: live resize moves CALayer frames (panes
-// track at full rate), it must NOT resize pane chains or rebuild
-// swapchains per drag frame. On settle the flag clears and exactly one
-// resize + one rebuild converge to the final size.
+// current chain WITHOUT rebuilding: the seam canvas frame tracks natively
+// (autoresizingMask), so live resize must NOT resize retained board targets
+// or rebuild the swapchain per drag frame. On settle the flag clears and
+// exactly one resize + one rebuild converge to the final size.
 bool Window_isLiveResizing(const Window *window);
 
 // --- Chrome capability toggles (style-mask API) ---
@@ -332,8 +333,9 @@ void *Window_nativeHandle(const Window *window);
 void *Window_metalLayer(Window *window);
 void Window_setGravityTopLeft(Window *window);
 
-// Worker present transaction: explicit CoreAnimation commit per board+pane
-// present walk (Vk_clearPresent + VkPane_presentAll). The present worker
+// Worker present transaction: explicit CoreAnimation commit per present
+// walk (Vk_clearPresent; the pane-era VkPane_presentAll walk is retired).
+// The present worker
 // owns no runloop, so its implicit transaction never commits at idle and
 // every presentsWithTransaction=YES drawable would stall behind it —
 // Begin/End release YES-presents on worker cadence. Apple-only (impl in
@@ -425,5 +427,9 @@ uint64_t Window_sizeGeneration(Window *window);
 // regular loop catches up one tick later either way.
 typedef void (*WindowResizeRenderFn)(void *userdata);
 void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *userdata);
+// Currently installed resize render hook, or nullptr when none (null = the
+// window's event handlers own the geometry renders; non-null = the hook is
+// the single renderer per geometry event).
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window);
 
 #endif

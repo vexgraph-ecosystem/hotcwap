@@ -13,33 +13,64 @@
 #include <stdio.h>
 
 #include "window/window.h"
+#include "annotation/definition.h"
+#include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/draft.h"
 #include "annotation/incomplete.h"
 #include "annotation/intention.h"
 #include "annotation/platform_exclusive.h"
-#include "annotation/overview.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Window
+ * ============================================================================
+ * Win32 platform implementation stub of the high-level Window abstraction.
+ * Provides fallback function symbols matching the window.h platform-agnostic API
+ * seam on Windows environments, returning safe defaults until full Win32 User32
+ * and DXGI integration is completed.
+ *
+ * Implements the Cold-Strict, Hot-Minimal Validation Law and preserves ABI
+ * compatibility across targets by completing the Window constructor, core,
+ * setter, and getter contracts.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
  * ============================================================================
- * MODULE: Window (window/window.c)
+ * CLASS: Window (window/window.c)
  * LEVEL: L4 — Self-Management (OS window backend persisting across swaps)
  * ============================================================================
-  * platform-agnostic window API.
-  *
-  * STRUCT FIELDS: none — stub backend (no Window struct defined here; real fields live in window/window_cocoa.m)
-  *
-  * FUNCTION REGISTRY:
+ * SUMMARY:
+ *   Win32 stub backend for the platform-agnostic Window API.
+ *   Provides complete fallback symbol definitions matching window.h for Windows builds.
+ *
+ * STRUCT FIELDS:
  * ----------------------------------------------------------------------------
- * Constructors:
+ *   (none — stub backend; real fields live in window/window_cocoa.m)
+ *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
+ * FUNCTION REGISTRY:
+ * ----------------------------------------------------------------------------
+ * Public Constructors: (.h)
  *   - Window_0(void)
  *   - Window_1(title)
  *   - Window_3(title, width, height)
  *   - Window_new(desc)
  *   - Window_create(title, width, height)
  *
- * Core Functions:
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
  *   - Window_destroy(window)
+ *   - Window_destroyAll(void)
  *   - Window_shouldClose(window)
  *   - Window_pollEvents(void)
  *   - Window_width(window)
@@ -57,6 +88,7 @@
  *   - Window_restore(window)
  *   - Window_toggleFullscreen(window)
  *   - Window_contentView(window)
+ *   - Window_nativeHandle(window)
  *   - Window_metalLayer(window)
  *   - Window_present(window, frame)
  *   - Window_addKeyAdapter(window, adapter)
@@ -72,7 +104,11 @@
  *   - Window_focus(window)
  *   - Window_sizeGeneration(window)
  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - Window_setShouldClose(window, shouldClose)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
  *   - Window_setLocation(window, x, y)
@@ -80,13 +116,17 @@
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)
  *   - Window_setEnabled(window, enabled)
+ *   - Window_setKeyEnabled(window, enabled)
  *   - Window_setResizable(window, resizable)
  *   - Window_setClosable(window, closable)
  *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)
  *   - Window_setUndecorated(window, type)
-  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stderr stub
-  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)  : macOS-only stderr stub
+ *   - Window_setDecorated(window, decorated)
+ *   - Window_setNaked(window, naked)
+ *   - Window_setBorderless(window, borderless)
+ *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)
+ *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
@@ -104,22 +144,35 @@
  *   - Window_setGravityTopLeft(window)
  *   - Window_setResizeRenderHook(window, fn, userdata)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
  *   - Window_getLocation(window, outX, outY)
  *   - Window_getContentOrigin(window, outX, outY)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
  *   - Window_isEnabled(window)
+ *   - Window_isKeyEnabled(window)
+ *   - Window_isLiveResizing(window)
  *   - Window_isResizable(window)
  *   - Window_isClosable(window)
  *   - Window_isMiniaturizable(window)
- *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stderr stub
- *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)  : macOS-only stderr stub
+ *   - Window_isDecorated(window)
+ *   - Window_isNaked(window)
+ *   - Window_isBorderless(window)
+ *   - Window_macOS_isTrafficLightButtonVisible(window, light)
+ *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
  *   - Window_isFocused(window)
  *   - Window_getMonitorId(window)
  *   - Window_getCursorType(window)
+ *   - Window_getLifecycle(window)
+ *   - Window_getResizeRenderHook(window)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -141,6 +194,9 @@ Window *Window_create(const char *title, int width, int height) {
 ;;INCOMPLETE // DestroyWindow; no-op until implemented.
 void Window_destroy(Window *window) {
     (void) window;
+}
+
+void Window_destroyAll(void) {
 }
 
 ;;INCOMPLETE // Poll WM_QUIT; false until implemented.
@@ -225,6 +281,12 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
     (void) window;
     (void) fn;
     (void) userdata;
+}
+
+;;INCOMPLETE // No hook slot on the stub platform; nullptr until implemented.
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
+    (void) window;
+    return nullptr;
 }
 
 uint32_t Window_getMonitorId(const Window *window) {

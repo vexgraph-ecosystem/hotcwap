@@ -13,11 +13,29 @@
 #include <stdio.h>
 
 #include "window/window.h"
+#include "annotation/definition.h"
+#include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/draft.h"
 #include "annotation/incomplete.h"
 #include "annotation/intention.h"
 #include "annotation/platform_exclusive.h"
-#include "annotation/overview.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Window_linux
+ * ============================================================================
+ * Linux/X11 platform implementation stub of the high-level Window abstraction.
+ * Provides fallback symbols matching the window.h platform-agnostic API
+ * seam on Linux and Unix environments, returning safe defaults until complete
+ * Xlib/XCB integration is linked.
+ *
+ * Conforms to the Cold-Strict, Hot-Minimal Validation Law and satisfies ABI
+ * linkage requirements across non-Apple POSIX environments.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -25,16 +43,27 @@
  * MODULE: Window_linux (window/window_linux.c)
  * LEVEL: L4 — Self-Management (Linux/X11 OS window backend)
  * ============================================================================
-  * Linux/X11 backend for the Window API.
-  *
-  * STRUCT FIELDS: none — stub backend (no Window struct defined here; real fields live in window/window_cocoa.m)
-  *
-  * FUNCTION REGISTRY:
+ * SUMMARY:
+ *   Linux/X11 backend stub for the Window API.
+ *   Provides fallback symbol implementations for Linux/Unix builds.
+ *
+ * STRUCT FIELDS:
  * ----------------------------------------------------------------------------
- * Constructors:
+ *   (none — stub backend; real fields live in window/window_cocoa.m)
+ *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
+ * FUNCTION REGISTRY:
+ * ----------------------------------------------------------------------------
+ * Public Constructors: (.h)
  *   - Window_create(title, width, height)
  *
- * Core Functions:
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
  *   - Window_destroy(window)
  *   - Window_shouldClose(window)
  *   - Window_pollEvents(void)
@@ -44,7 +73,11 @@
  *   - Window_restore(window)
  *   - Window_toggleFullscreen(window)
  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - Window_setShouldClose(window, shouldClose)
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)
  *   - Window_setEnabled(window, enabled)
@@ -58,14 +91,17 @@
  *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)
  *   - Window_setUndecorated(window, mode)
-  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stderr stub
-  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)  : macOS-only stderr stub
+ *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)
+ *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)
  *   - Window_setFullscreen(window, fullscreen)
  *   - Window_setDRM(window, enabled)
  *   - Window_setMinSize(window, width, height)
  *   - Window_setMaxSize(window, width, height)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
  *   - Window_isEnabled(window)
@@ -75,10 +111,13 @@
  *   - Window_isResizable(window)
  *   - Window_isClosable(window)
  *   - Window_isMiniaturizable(window)
- *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stderr stub
- *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)  : macOS-only stderr stub
+ *   - Window_macOS_isTrafficLightButtonVisible(window, light)
+ *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -184,6 +223,12 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
     (void) window;
     (void) fn;
     (void) userdata;
+}
+
+;;INCOMPLETE // Hook slot not wired on X11 yet; nullptr until implemented.
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
+    (void) window;
+    return nullptr;
 }
 
 uint32_t Window_getMonitorId(const Window *window) {

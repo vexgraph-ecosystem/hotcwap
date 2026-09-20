@@ -60,10 +60,29 @@
 #include "input/mouse.h"
 #include "input/touch.h"
 #include "buffer/buffer.h"
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/intention.h"
 #include "annotation/draft.h"
 #include "annotation/platform_exclusive.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Window_win32
+ * ============================================================================
+ * Win32 desktop window abstraction implementation mirroring Cocoa capabilities.
+ * Manages native HWND lifecycle, WndProc message dispatch, and User32 display
+ * geometry, feeding OS input directly into vexspoke device rings and driving the
+ * embedded WindowEvent callback registry.
+ *
+ * Conforms to the Window Decoupling Law by treating the window as a dumb display
+ * surface and callback seam, supporting software frame presentation via
+ * StretchDIBits alongside inert compatibility stubs.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -71,144 +90,192 @@
  * CLASS: Window (window/window_win32.c)
  * LEVEL: L4 — Self-Management (Win32 OS window shim owned by the OS)
  * ============================================================================
- * DRAFT Win32 mirror of the AppKit window backend. One opaque C handle per
- * HWND; the engine loop constructs it, configures the chrome, shows it, then
- * pumps Window_pollEvents once per frame while a render path draws through
- * the content view (the HWND itself) / event bridges. OS input is routed into
- * the vexspoke device rings (tagged with this window's id); OS lifecycle
- * (quit, resize, fullscreen, minimize, restore, press, focus) fires the
- * embedded WindowEvent. Zero Vulkan, zero D3D, zero compositing — a Window is
- * a dumb surface + callback bridge per the Window Decoupling Law.
+ * SUMMARY:
+ *   DRAFT Win32 mirror of the AppKit window backend. One opaque C handle per
+ *   HWND; the engine loop constructs it, configures the chrome, shows it, then
+ *   pumps Window_pollEvents once per frame while a render path draws through
+ *   the software present seam (StretchDIBits) / event bridges. OS input is
+ *   routed into the vexspoke device rings (tagged with this window's id); OS
+ *   lifecycle (quit, resize, fullscreen, minimize, restore, press, focus) fires
+ *   the embedded WindowEvent. Zero Vulkan, zero Metal, zero compositing — a
+ *   Window is a dumb surface + callback bridge per the Window Decoupling Law.
  *
  * STRUCT FIELDS (Mirroring window/window.h incomplete tag — completed here):
  * ----------------------------------------------------------------------------
- *   HWND hwnd;                      // OS window (we own it; DestroyWindow on close)
- *   WindowEvent lifecycle;          // OS lifecycle registry (window/window_event.h)
- *   uint32_t id;                    // engine window id (1..N, 0 = FOCUS_BROADCAST)
- *   _Atomic bool shouldClose;       // true once close requested (Thread 0 writes, loop reads)
- *   _Atomic uint64_t sizeGeneration; // resize-reflection counter (thread 0 bumps)
- *   _Atomic int cachedWidth;        // content width at last thread-0 event (any thread reads)
- *   _Atomic int cachedHeight;       // content height at last thread-0 event
- *   int cachedX;                    // top-left screen px at last thread-0 event
- *   int cachedY;                    // top-left screen px at last thread-0 event
- *   int cachedContentX;             // CONTENT top-left px (below title bar)
- *   int cachedContentY;             // CONTENT top-left px (below title bar)
- *   _Atomic bool liveResizing;      // thread 0 during WM_ENTERSIZEMOVE; renderer consumes
- *   _Atomic bool miniaturizing;     // thread 0 during WM_SIZE MINIMIZE; suppress merge
- *   _Atomic int presentMode;        // present pacing (FIFO/IMMEDIATE), pure state
- *   _Atomic bool transparent;       // composite transparency request, pure state
- *   _Atomic uint64_t renderGeneration; // policy-reflection counter (rebuild ticket)
- *   _Atomic(void*) topLayer;        // content board handle (owned by the render repo)
- *   _Atomic(void*) bottomLayer;     // scene board handle (owned by the render repo)
- *   _Atomic bool enabled;           // false mutes ALL OS input for this window
- *   bool lastFocused;               // focus-flip detection during the pump
- *   _Atomic uint32_t monitorId;     // display index mirror (0 = unmapped)
- *   WindowCursorType cursorType;    // active OS cursor style
- *   bool decorated;                 // chrome mode: WINDOW_DECORATED vs *_UNDECORATED_*
- *   bool fullscreen;                // WS style swapped to popup on the monitor rect
- *   RECT savedFrame;                // normal (pre-fullscreen) outer frame
- *   int minWidth, minHeight;        // content constraints (WM_GETMINMAXINFO)
- *   int maxWidth, maxHeight;        // 0 = unbounded
- *   bool movableByBackground;       // WM_NCHITTEST returns HTCAPTION on client area
- *   bool fullscreenButton;          // green-button gate: WS_MAXIMIZEBOX present
- *   bool resizableEnabled;          // WS_THICKFRAME/WS_MAXIMIZEBOX gate
- *   bool closableEnabled;           // WM_CLOSE acceptance gate
- *   bool minimizeEnabled;           // WS_MINIMIZEBOX presence gate
- *   unsigned char *framePixels;     // software present staging (RGBA8, latest frame)
- *   int frameW, frameH;             // staging width/height in px
- *   bool frameDirty;                // WM_PAINT should blit framePixels
- *   WindowResizeRenderFn resizeRenderFn;  // resize-cadence render hook
- *   void *resizeRenderUserdata;     // hook userdata
+ *   HWND hwnd;                         // Win32 window (we own it)
+ *   WindowEvent lifecycle;             // OS lifecycle registry
+ *   uint32_t id;                       // engine window id (1..N, 0 = broadcast)
+ *   _Atomic bool shouldClose;          // true once close requested
+ *   _Atomic uint64_t sizeGeneration;   // resize-reflection counter
+ *   _Atomic int cachedWidth;           // client width at last WM_SIZE
+ *   _Atomic int cachedHeight;          // client height at last WM_SIZE
+ *   _Atomic bool liveResizing;         // set during WM_ENTERSIZEMOVE..EXIT
+ *   _Atomic int presentMode;           // present pacing (FIFO/IMMEDIATE), stored
+ *   _Atomic bool transparent;          // composite transparency request, stored
+ *   _Atomic uint64_t renderGeneration; // policy-reflection counter
+ *   _Atomic(void*) topLayer;           // content board handle
+ *   _Atomic(void*) bottomLayer;        // scene board handle
+ *   _Atomic bool enabled;              // false mutes ALL OS input
+ *   bool lastFocused;                  // focus-flip detection
+ *   _Atomic uint32_t monitorId;        // HMONITOR slot id (0 = unmapped)
+ *   WindowCursorType cursorType;       // current cursor request
+ *   bool decorated;                    // chrome mode (WS_OVERLAPPED vs WS_POPUP)
+ *   bool fullscreen;                   // fullscreen state
+ *   WINDOWPLACEMENT prevPlacement;     // restored placement for fullscreen toggle
+ *   int minWidth, minHeight;           // WM_GETMINMAXINFO minimums (0 = unset)
+ *   int maxWidth, maxHeight;           // WM_GETMINMAXINFO maximums (0 = unbounded)
+ *   bool movableByBackground;          // WM_NCHITTEST HTCAPTION toggle
+ *   bool fullscreenButton;             // WS_MAXIMIZEBOX gate
+ *   bool resizableEnabled;             // WS_THICKFRAME gate
+ *   bool closableEnabled;              // SC_CLOSE system-menu gate
+ *   bool minimizeEnabled;              // WS_MINIMIZEBOX gate
+ *   bool clickThrough;                 // WS_EX_TRANSPARENT toggle
+ *   float opacity;                     // SetLayeredWindowAttributes alpha
+ *   bool shadow;                       // DWM non-client-rendering policy
+ *   int frameW, frameH;                // retained bitmap dimensions in px
+ *   BITMAPINFO bmi;                    // retained bitmap header for StretchDIBits
+ *   WindowResizeRenderFn resizeRenderFn;   // resize-cadence render hook
+ *   void *resizeRenderUserdata;        // hook userdata
  *
  * PRIVATE HELPERS (kept file-local, no external API):
  * ----------------------------------------------------------------------------
- *   WindowSlot                       — id-registry slot record
- *     HWND hwnd;                     // OS window owning this id
- *     Window *handle;                // C handle owning that window
- *   windowWndProc(HWND, UINT, WPARAM, LPARAM) — the per-window message sink
- *   winClaimForeground(HWND)         — bounded foreground-ground claim (show/focus)
+ *   WindowSlot                         — id-registry slot record
+ *     HWND hwnd;                       // the window carrying this id
+ *     Window *handle;                  // C handle owning that window
+ *   Win32Monitor                       — HMONITOR slot record
+ *     HMONITOR handle;                 // monitor handle (may be nulled)
+ *     uint32_t id;                     // stable engine id (index + 1)
+ *   win32EnsureClass(), windowWndProc()
  *   windowRefreshSize, windowRefreshFocus, windowRefreshMonitor, recenterIfLocked
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
+ * Public Constructors: (.h)
  *   - Window_0(void)                        : Window_new(nullptr)
  *   - Window_1(title)                       : Window_new(&{ .title })
  *   - Window_3(title, width, height)
  *   - Window_new(desc)                      : descResolve + windowAlloc + show
  *   - Window_create(title, width, height)
  *
- * Core Functions:
+ * Private Constructors: (.c static)
+ *   - windowAlloc(desc)                     : shared constructor implementation
+ *   - descResolve(desc)                     : default parameter resolution
+ *
+ * Public Core Functions: (.h)
  *   - Window_destroy(window)                : detach, close, free handle
+ *   - Window_destroyAll(void)
  *   - Window_shouldClose(window)
  *   - Window_pollEvents(void)               : drain the message queue once per frame
- *   - windowWndProc(...)                    : OS message -> device rings + WindowEvent
- *   - Window_width(window) / Window_height(window)
- *   - Window_dispatchEvents(window)
- *   - Window_compositePanes(window)         : inert (;;INTENTION)
+ *   - Window_width(window)
+ *   - Window_height(window)
+ *   - Window_center(window)
+ *   - Window_show(window)
+ *   - Window_hide(window)
+ *   - Window_attachPanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_resizePanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_compositePanes(window, contentPanel)      : inert (;;INTENTION)
  *   - Window_compositeBoards(window)        : inert (;;INTENTION)
  *   - Window_orderLayers(window)            : inert (;;INTENTION)
- *   - Window_attachPanes/resizePanes        : inert (;;INTENTION)
- *   - Window_present(window, frame)         : lean StretchDIBits software path
- *   - Window_workerPresentBegin/End         : inert (;;INTENTION)
+ *   - Window_renderGeneration(window)
+ *   - Window_bringToFront(window)
+ *   - Window_minimize(window)
+ *   - Window_restore(window)
+ *   - Window_toggleFullscreen(window)
  *   - Window_contentView(window)            : returns the HWND (the surface anchor)
+ *   - Window_nativeHandle(window)
  *   - Window_metalLayer(window)             : nullptr — no Metal here (;;INTENTION)
+ *   - Window_present(window, frame)         : lean StretchDIBits software path
+ *   - Window_workerPresentBegin(window)     : inert (;;INTENTION)
+ *   - Window_workerPresentEnd(window)       : inert (;;INTENTION)
+ *   - Window_addKeyAdapter(window, adapter)
+ *   - Window_removeKeyAdapter(window, adapter)
+ *   - Window_addMouseAdapter(window, adapter)
+ *   - Window_removeMouseAdapter(window, adapter)
+ *   - Window_addTouchAdapter(window, adapter)
+ *   - Window_removeTouchAdapter(window, adapter)
+ *   - Window_addWindowAdapter(window, adapter)
+ *   - Window_removeWindowAdapter(window, adapter)
+ *   - Window_dispatchEvents(window)
+ *   - Window_id(window)
+ *   - Window_focus(window)
+ *   - Window_sizeGeneration(window)
  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - windowWndProc(...)                    : OS message dispatches to device rings + WindowEvent
+ *
+ * Public Setters: (.h)
+ *   - Window_setShouldClose(window, shouldClose)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
  *   - Window_setLocation(window, x, y)      : SetWindowPos (top-left px)
- *   - Window_center(window)
- *   - Window_show(window) / Window_hide(window) / Window_setVisible(window, v)
- *   - Window_setTopLayer/BottomLayer(window, layer)
+ *   - Window_setVisible(window, visible)
+ *   - Window_setTopLayer(window, layer)
+ *   - Window_setBottomLayer(window, layer)
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)   : WS_EX_LAYERED
  *   - Window_setEnabled(window, enabled)
- *   - Window_setResizable/Closable/Miniaturizable(window, flag)  : WS style bits
+ *   - Window_setKeyEnabled(window, enabled)
+ *   - Window_setResizable(window, resizable)       : WS style bits
+ *   - Window_setClosable(window, closable)
+ *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)   : WS_MAXIMIZEBOX gate
- *   - Window_setUndecorated(window, mode)      : WS_POPUP / WS_OVERLAPPEDWINDOW
+ *   - Window_setUndecorated(window, mode)          : WS_POPUP / WS_OVERLAPPEDWINDOW
+ *   - Window_setDecorated(window, decorated)
+ *   - Window_setNaked(window, naked)
+ *   - Window_setBorderless(window, borderless)
  *   - Window_setFloatingTrafficLights(window, floating) : macOS-only no-op
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stub
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)          : macOS-only stub
- *   - Window_setOpacity(window, opacity)      : SetLayeredWindowAttributes LWA_ALPHA
+ *   - Window_setOpacity(window, opacity)          : SetLayeredWindowAttributes LWA_ALPHA
  *   - Window_setTransparentBackground(window, transparent) : WS_EX_LAYERED + clear-color note
- *   - Window_setBlur(window, blur)            : DwmEnableBlurBehindWindow (DECORATED ban)
- *   - Window_setAlwaysOnTop(window, onTop)    : HWND_TOPMOST / HWND_NOTOPMOST
- *   - Window_setClickThrough(window, clickThrough)   : WS_EX_TRANSPARENT
- *   - Window_setShadow(window, shadow)        : DWM non-client-rendering policy
+ *   - Window_setBlur(window, blur)                : DwmEnableBlurBehindWindow (DECORATED ban)
+ *   - Window_setAlwaysOnTop(window, onTop)        : HWND_TOPMOST / HWND_NOTOPMOST
+ *   - Window_setClickThrough(window, clickThrough) : WS_EX_TRANSPARENT
+ *   - Window_setShadow(window, shadow)            : DWM non-client-rendering policy
  *   - Window_setMovableByBackground(window, movable) : WM_NCHITTEST HTCAPTION
- *   - Window_bringToFront(window)
- *   - Window_setFullscreen(window, fullscreen) / Window_toggleFullscreen(window)
- *   - Window_setDRM(window, enabled)          : no-op (;;INTENTION — macOS concept)
- *   - Window_setMinSize/MaxSize(window, width, height) : WM_GETMINMAXINFO min/max track
+ *   - Window_setFullscreen(window, fullscreen)
+ *   - Window_setDRM(window, enabled)              : no-op (;;INTENTION — macOS concept)
+ *   - Window_setMinSize(window, width, height)    : WM_GETMINMAXINFO min track
+ *   - Window_setMaxSize(window, width, height)    : WM_GETMINMAXINFO max track
  *   - Window_setCursorType(window, type)
- *   - Window_setCursorLocked(window, locked)  : ClipCursor + ShowCursor(FALSE) + warp
+ *   - Window_setCursorLocked(window, locked)      : ClipCursor + ShowCursor(FALSE) + warp
  *   - Window_setResizeRenderHook(window, fn, userdata)
- *   - Window_addKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
- *   - Window_focus(window)
- *   - Window_setGravityTopLeft(window)        : no-op (;;INTENTION)
+ *   - Window_setGravityTopLeft(window)            : no-op (;;INTENTION)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
  *   - Window_getLocation(window, outX, outY)
  *   - Window_getContentOrigin(window, outX, outY)
- *   - Window_getTopLayer/BottomLayer(window)
+ *   - Window_getTopLayer(window)
+ *   - Window_getBottomLayer(window)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
  *   - Window_renderGeneration(window)
  *   - Window_isEnabled(window)
+ *   - Window_isKeyEnabled(window)
  *   - Window_isLiveResizing(window)
- *   - Window_isResizable/Closable/Miniaturizable(window)
+ *   - Window_isResizable(window)
+ *   - Window_isClosable(window)
+ *   - Window_isMiniaturizable(window)
+ *   - Window_isDecorated(window)
+ *   - Window_isNaked(window)
+ *   - Window_isBorderless(window)
  *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stub
  *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY) : macOS-only stub
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
  *   - Window_getCursorType(window)
- *   - Window_removeKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
  *   - Window_id(window)
  *   - Window_isFocused(window)
  *   - Window_getLifecycle(window)
  *   - Window_getMonitorId(window)
  *   - Window_sizeGeneration(window)
+ *   - Window_getResizeRenderHook(window)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 ;;PLATFORM_EXCLUSIVE("Windows")
@@ -1983,6 +2050,10 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
         return;
     (*window).resizeRenderFn = fn;
     (*window).resizeRenderUserdata = userdata;
+}
+
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
+    return window ? (*window).resizeRenderFn : nullptr;
 }
 
 #endif // _WIN32

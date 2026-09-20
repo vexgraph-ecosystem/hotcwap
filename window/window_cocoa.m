@@ -34,8 +34,29 @@
 #include "input/key.h"
 #include "input/mouse.h"
 #include "input/touch.h"
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/intention.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Window
+ * ============================================================================
+ * Platform abstraction encapsulating an OS-managed desktop display surface.
+ * On macOS, implements the native AppKit backend via an NSWindow handle, owning
+ * the window chrome, display scaling, frame geometry, and event dispatch seam.
+ * Strictly decoupled from GPU rendering pipelines according to the Window
+ * Decoupling Law, serving solely as a dumb presentation surface and callback bridge.
+ *
+ * Dispatches input events directly into vexspoke device rings (Key, Mouse, Touch)
+ * and forwards window lifecycle state changes (geometry resize, minimize, restore,
+ * fullscreen, key focus, and vetoable termination requests) through the embedded
+ * WindowEvent registry on Thread 0.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -43,14 +64,15 @@
  * CLASS: Window (window/window_cocoa.m)
  * LEVEL: L4 — Self-Management (AppKit OS window shim owned by the OS)
  * ============================================================================
- * The fresh, lean AppKit window backend. One opaque C handle per NSWindow;
- * the engine loop constructs it, configures the chrome, shows it, then pumps
- * Window_pollEvents once per frame while a render path draws through the
- * content view / event bridges. OS input is routed into the vexspoke device
- * rings (tagged with this window's id); OS lifecycle (quit, resize,
- * fullscreen, minimize, restore, press, focus, zoom) fires the embedded
- * WindowEvent. Zero Vulkan, zero Metal, zero compositing — a Window is a
- * dumb surface + callback bridge per the Window Decoupling Law.
+ * SUMMARY:
+ *   The fresh, lean AppKit window backend. One opaque C handle per NSWindow;
+ *   the engine loop constructs it, configures the chrome, shows it, then pumps
+ *   Window_pollEvents once per frame while a render path draws through the
+ *   content view / event bridges. OS input is routed into the vexspoke device
+ *   rings (tagged with this window's id); OS lifecycle (quit, resize,
+ *   fullscreen, minimize, restore, press, focus, zoom) fires the embedded
+ *   WindowEvent. Zero Vulkan, zero Metal, zero compositing — a Window is a
+ *   dumb surface + callback bridge per the Window Decoupling Law.
  *
  * STRUCT FIELDS (Mirroring window/window.h incomplete tag — completed here):
  * ----------------------------------------------------------------------------
@@ -100,46 +122,88 @@
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
+ * Public Constructors: (.h)
  *   - Window_0(void)
  *   - Window_1(title)
  *   - Window_3(title, width, height)
  *   - Window_new(desc)
  *   - Window_create(title, width, height)
  *
- * Core Functions:
+ * Private Constructors: (.c static)
+ *   - windowAlloc(desc)               : shared constructor core
+ *   - descResolve(desc)               : resolve configuration defaults
+ *
+ * Public Core Functions: (.h)
  *   - Window_destroy(window)          : detach delegate, close, free handle
+ *   - Window_destroyAll(void)
  *   - Window_shouldClose(window)
  *   - Window_pollEvents(void)         : drain OS queue once per frame
- *   - routeEvent(event)               : OS event -> device rings + WindowEvent
- *   - windowAlloc(desc)               : shared constructor core
- *   - Window_width(window) / Window_height(window)
- *   - Window_dispatchEvents(window)
- *   - Window_compositePanes/window)   : inert (;;INTENTION)
+ *   - Window_width(window)
+ *   - Window_height(window)
+ *   - Window_center(window)
+ *   - Window_show(window)
+ *   - Window_hide(window)
+ *   - Window_attachPanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_resizePanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_compositePanes(window, contentPanel)      : inert (;;INTENTION)
  *   - Window_compositeBoards(window)  : inert (;;INTENTION)
- *   - Window_orderLayers(window)      : inert (;;INTENTION)
- *   - Window_attachPanes/resizePanes  : inert (;;INTENTION)
- *   - Window_present(window, frame)   : inert (;;INTENTION)
- *   - Window_workerPresentBegin/End   : inert (;;INTENTION)
+ *   - Window_renderGeneration(window)
+ *   - Window_bringToFront(window)
+ *   - Window_minimize(window)
+ *   - Window_restore(window)
+ *   - Window_toggleFullscreen(window)
  *   - Window_contentView(window)
  *   - Window_metalLayer(window)       : nullptr — no Metal here (;;INTENTION)
+ *   - Window_present(window, frame)   : inert (;;INTENTION)
+ *   - Window_workerPresentBegin(window) : inert (;;INTENTION)
+ *   - Window_workerPresentEnd(window)   : inert (;;INTENTION)
+ *   - Window_orderLayers(window)      : inert (;;INTENTION)
+ *   - Window_addKeyAdapter(window, adapter)
+ *   - Window_removeKeyAdapter(window, adapter)
+ *   - Window_addMouseAdapter(window, adapter)
+ *   - Window_removeMouseAdapter(window, adapter)
+ *   - Window_addTouchAdapter(window, adapter)
+ *   - Window_removeTouchAdapter(window, adapter)
+ *   - Window_addWindowAdapter(window, adapter)
+ *   - Window_removeWindowAdapter(window, adapter)
+ *   - Window_dispatchEvents(window)
+ *   - Window_id(window)
+ *   - Window_focus(window)
+ *   - Window_sizeGeneration(window)
  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - routeEvent(event)               : OS event dispatches to device rings + WindowEvent
+ *   - windowRefreshSize(window)       : compute geometry and trigger resize callbacks
+ *   - windowRefreshFocus(window, key) : track key window focus transitions
+ *   - windowRefreshMonitor(window)    : update active monitor identity
+ *   - windowIdAcquire(win, handle)    : register handle in slot registry
+ *   - windowIdRelease(id)             : release slot registry handle
+ *   - windowIdOf(win)                 : resolve window ID from NSWindow pointer
+ *   - windowHandleOf(win)             : resolve Window handle from NSWindow pointer
+ *   - recenterIfLocked(void)          : cursor lock recenter helper
+ *   - claimKeyAfterActivation(win)    : take key window status on app activation
+ *
+ * Public Setters: (.h)
+ *   - Window_setShouldClose(window, shouldClose)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
  *   - Window_setLocation(window, x, y)
- *   - Window_center(window)
- *   - Window_show(window) / Window_hide(window) / Window_setVisible(window, v)
- *   - Window_setTopLayer/BottomLayer(window, layer)
+ *   - Window_setVisible(window, visible)
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)
  *   - Window_setEnabled(window, enabled)
- *   - Window_setResizable/Closable/Miniaturizable(window, flag)
+ *   - Window_setKeyEnabled(window, enabled)
+ *   - Window_setResizable(window, resizable)
+ *   - Window_setClosable(window, closable)
+ *   - Window_setMiniaturizable(window, miniaturizable)
  *   - Window_setFullscreenButton(window, enabled)
- *   - Window_setUndecorated(window, mode)
- *   - Window_setFloatingTrafficLights(window, floating)
+ *   - Window_setUndecorated(window, type)
+ *   - Window_setDecorated(window, decorated)
+ *   - Window_setNaked(window, naked)
+ *   - Window_setBorderless(window, borderless)
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)
+ *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
  *   - Window_setBlur(window, blur)
@@ -147,37 +211,48 @@
  *   - Window_setClickThrough(window, clickThrough)
  *   - Window_setShadow(window, shadow)
  *   - Window_setMovableByBackground(window, movable)
- *   - Window_setFullscreen(window, fullscreen) / Window_toggleFullscreen(window)
+ *   - Window_setFullscreen(window, fullscreen)
  *   - Window_setDRM(window, enabled)
- *   - Window_setMinSize/MaxSize(window, width, height)
- *   - Window_setCursorType(window, type)
+ *   - Window_setMinSize(window, width, height)
+ *   - Window_setMaxSize(window, width, height)
  *   - Window_setCursorLocked(window, locked)
- *   - Window_setResizeRenderHook(window, fn, userdata)
- *   - Window_addKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
- *   - Window_focus(window)
+ *   - Window_setCursorType(window, type)
  *   - Window_setGravityTopLeft(window)  : no-op (;;INTENTION)
+ *   - Window_setResizeRenderHook(window, fn, userdata)
+ *   - Window_setTopLayer(window, layer)
+ *   - Window_setBottomLayer(window, layer)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
  *   - Window_getLocation(window, outX, outY)
  *   - Window_getContentOrigin(window, outX, outY)
- *   - Window_getTopLayer/BottomLayer(window)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
- *   - Window_renderGeneration(window)
  *   - Window_isEnabled(window)
+ *   - Window_isKeyEnabled(window)
  *   - Window_isLiveResizing(window)
- *   - Window_isResizable/Closable/Miniaturizable(window)
+ *   - Window_isResizable(window)
+ *   - Window_isClosable(window)
+ *   - Window_isMiniaturizable(window)
+ *   - Window_isDecorated(window)
+ *   - Window_isNaked(window)
+ *   - Window_isBorderless(window)
  *   - Window_macOS_isTrafficLightButtonVisible(window, light)
  *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
+ *   - Window_isFocused(window)
+ *   - Window_getMonitorId(window)
  *   - Window_getCursorType(window)
- *   - Window_removeKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
-  *   - Window_id(window)
-  *   - Window_isFocused(window)
-  *   - Window_getLifecycle(window)
-  *   - Window_getMonitorId(window)
-  *   - Window_sizeGeneration(window)
+ *   - Window_getLifecycle(window)
+ *   - Window_getTopLayer(window)
+ *   - Window_getBottomLayer(window)
+ *   - Window_getResizeRenderHook(window)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 ;;INTENTION("GPU-era composite surface (attachPanes/resizePanes/compositePanes/compositeBoards/orderLayers/metalLayer/setGravityTopLeft/workerPresentBegin/workerPresentEnd/present) is retained as inert stubs so the still-unmigrated darling compositor keeps linking; zero Vulkan/Metal code lives in this file. They retire together with their window.h declarations once darling migrates onto the WindowEvent bridge (the Window Decoupling Law).")
@@ -368,12 +443,31 @@ static Window *windowHandleOf(NSWindow *window) {
 // TOP-LEFT coordinates (matching darling Container_resolve layout 1:1). Also
 // tracks live-resize start/end onto the handle so Window_isLiveResizing works
 // without any GPU state.
+// setFrameSize: override: the SYNCHRONOUS per-step resize seam. AppKit calls
+// setFrameSize: on the content view inside the live-resize tracking loop,
+// immediately after the window frame changes and BEFORE the compositor draws
+// the new bounds — the same beat the old VulkanView used. Firing the resize
+// hook here closes the one-step gap: windowDidResize: (post-display) and the
+// pump reflection remain as idempotent backups (windowRefreshSize no-ops when
+// the rounded size is unchanged), but the drag-step chase now runs at geometry
+// time, so layer frame + drawableSize + the forced present land in the same
+// composite pass as the moved edge.
+static void windowRefreshSize(Window *window);
 @interface WindowContentView : NSView
 @end
 
 @implementation WindowContentView
 - (BOOL)isFlipped {
     return YES;
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    Window *w = windowHandleOf([self window]);
+    if (getenv("VEX_GEOMETRY_LOG") != nullptr)
+        fprintf(stderr, "sf: %.0fx%.0f\n", newSize.width, newSize.height);
+    if (w)
+        windowRefreshSize(w);
 }
 
 - (void)viewWillStartLiveResize {
@@ -385,14 +479,24 @@ static Window *windowHandleOf(NSWindow *window) {
 
 - (void)viewDidEndLiveResize {
     Window *w = windowHandleOf([self window]);
-    if (w)
+    if (w) {
         atomic_store_explicit(&(*w).liveResizing, false, memory_order_relaxed);
+        windowRefreshSize(w);
+        // Settle rebuild beat: the FINAL drag step ran while the live flag
+        // was still set (it clears HERE, after the last geometry event), so
+        // the resize hook never saw a non-live tick — the frozen drawable
+        // size would persist and the trailing strip never fills. Force one
+        // hook pass with the flag clear: platformSyncLayer commits the new
+        // drawableSize exactly once, the present lands the reactive
+        // OUT_OF_DATE rebuild, and the settle frame chase refills the seam.
+        // The hook's drop ticket re-arms the loop if the rebuild defers the
+        // present one tick.
+        if ((*w).resizeRenderFn)
+            (*w).resizeRenderFn((*w).resizeRenderUserdata);
+    }
     [super viewDidEndLiveResize];
 }
 @end
-
-// Resize reflection helper (defined after the delegate). Thread 0 only.
-static void windowRefreshSize(Window *window);
 
 // App-level delegate: lets the process end when the last window closes.
 @interface WindowAppDelegate : NSObject <NSApplicationDelegate>
@@ -431,6 +535,8 @@ static void windowRefreshSize(Window *window);
 - (void)windowDidResize:(NSNotification*) notification {
     (void) notification;
     Window *w = self.handlePtr;
+    if (getenv("VEX_GEOMETRY_LOG") != nullptr)
+        fprintf(stderr, "dr:\n");
     if (w)
         windowRefreshSize(w);
 }
@@ -447,6 +553,7 @@ static void windowRefreshSize(Window *window);
     Window *w = self.handlePtr;
     if (w) {
         atomic_store_explicit(&(*w).liveResizing, false, memory_order_relaxed);
+        windowRefreshSize(w);
         WindowEvent_fireFullscreen(&(*w).lifecycle, w);
     }
 }
@@ -463,6 +570,11 @@ static void windowRefreshSize(Window *window);
     Window *w = self.handlePtr;
     if (w) {
         atomic_store_explicit(&(*w).liveResizing, false, memory_order_relaxed);
+        windowRefreshSize(w);
+        // Same settle beat as viewDidEndLiveResize: geometry changed while
+        // the live flag was set, so force one hook pass with it clear.
+        if ((*w).resizeRenderFn)
+            (*w).resizeRenderFn((*w).resizeRenderUserdata);
         WindowEvent_fireRestored(&(*w).lifecycle, w);
     }
 }
@@ -495,6 +607,7 @@ static void windowRefreshSize(Window *window);
     Window *w = self.handlePtr;
     if (w) {
         atomic_store_explicit(&(*w).miniaturizing, false, memory_order_relaxed);
+        windowRefreshSize(w);
         WindowEvent_fireRestored(&(*w).lifecycle, w);
     }
 }
@@ -528,21 +641,43 @@ static void windowRefreshSize(Window *window);
 
 // Resize reflection: compare the live content size against the cache and bump
 // sizegen + fire onResized + run the resize hook only on an actual change, so
-// a renderer polling once per frame pays one int compare. Thread 0 only.
+// a renderer polling once per frame pays one int compare. Rounded points via
+// lround (never (int) truncation: a Retina sub-point step crosses a rounding
+// boundary and fires, where truncation swallowed every step under 1pt).
+// Device-pixel change detection uses convertRectToBacking (same mapping the
+// WindowServer applies) — never lround(lround(frac) × scale), which double-
+// rounds and toggles ±1px at .5 fractional boundaries. CPU-only publish,
+// zero GPU waits — R3 owns the waits behind its 100ms fence / 25ms acquire
+// bounds. Thread 0 only.
 static void windowRefreshSize(Window *window) {
     if (window == nullptr || (*window).nsWindow == nil)
         return;
     @autoreleasepool {
-        NSRect content = [(*window).nsWindow contentRectForFrameRect:[(*window).nsWindow frame]];
-        int cw = (int) content.size.width;
-        int ch = (int) content.size.height;
-        if (cw != atomic_load_explicit(&(*window).cachedWidth, memory_order_relaxed)
-            || ch != atomic_load_explicit(&(*window).cachedHeight, memory_order_relaxed)) {
+        NSWindow *nsw = (*window).nsWindow;
+        NSView *cv = [nsw contentView];
+        NSRect content = cv != nil ? [cv bounds] : [nsw contentRectForFrameRect:[nsw frame]];
+        int cw = (int) lround(content.size.width);
+        int ch = (int) lround(content.size.height);
+
+
+        int lastW = atomic_load_explicit(&(*window).cachedWidth, memory_order_relaxed);
+        int lastH = atomic_load_explicit(&(*window).cachedHeight, memory_order_relaxed);
+        // Previous px: re-derive from the CURRENT live bounds — when the
+        // cached point size is unchanged, the px are unchanged too. Comparing
+        // against a separately-derived "last px" from the cached int introduced
+        // the double-round toggle; point-change is the correct gate.
+        if (cw != lastW || ch != lastH) {
             atomic_store_explicit(&(*window).cachedWidth, cw, memory_order_relaxed);
             atomic_store_explicit(&(*window).cachedHeight, ch, memory_order_relaxed);
             atomic_fetch_add_explicit(&(*window).sizeGeneration, 1, memory_order_release);
             WindowEvent_fireResized(&(*window).lifecycle, window, cw, ch);
-            if ((*window).resizeRenderFn)
+            // Genie gate: never render+present while the WindowServer is
+            // warping the window into or out of the dock — the seam present
+            // would target a moving/occluded surface. The deminiaturize path
+            // re-enters here AFTER the warp, so restore still renders.
+            if (!atomic_load_explicit(&(*window).miniaturizing, memory_order_relaxed)
+                    && ![nsw isMiniaturized]
+                    && (*window).resizeRenderFn)
                 (*window).resizeRenderFn((*window).resizeRenderUserdata);
         }
     }
@@ -1073,6 +1208,17 @@ void Window_destroy(Window *window) {
     free(window);
 }
 
+void Window_destroyAll(void) {
+    if (s_refs == nullptr || s_refCap == 0)
+        return;
+    for (uint32_t i = 1; i < s_refCap; i++) {
+        Window *handle = s_refs[i].handle;
+        if (handle != nullptr) {
+            Window_destroy(handle);
+        }
+    }
+}
+
 bool Window_shouldClose(Window *window) {
     return window ? atomic_load_explicit(&(*window).shouldClose, memory_order_relaxed) : true;
 }
@@ -1116,8 +1262,10 @@ uint64_t Window_renderGeneration(const Window *window) {
 
 // --- Graphics board slots (stored + ordered; rendering lives elsewhere) -----
 
-// The 2-VkImage System Layer Stacking:
-// Visual stack: NSWindow -> NSVisualEffectView (blur) -> bottomLayer (scenepane VkImage) -> topLayer (contentpane VkImage).
+// Retained board slot stacking (PARENTING ONLY — content is owned by the
+// render repo; boards composite into the single seam canvas, never parented
+// as on-screen layers in the pane-era sense):
+// Visual stack: NSWindow -> NSVisualEffectView (blur) -> bottomLayer (scene-board handle) -> topLayer (content-board handle).
 // CoreAnimation transaction brackets with actions disabled guarantee zero tearing and zero gap during live resize.
 void Window_orderLayers(Window *window) {
     if (window == nullptr || (*window).nsWindow == nil)
@@ -1224,6 +1372,13 @@ bool Window_isEnabled(const Window *window) {
 }
 
 bool Window_isLiveResizing(const Window *window) {
+    // LOCAL DIAGNOSTIC SEAM ONLY (never commit): /tmp/vex_live existing
+    // forces live mode so the modal-drag path reproduces without a mouse.
+    FILE *probe = fopen("/tmp/vex_live", "r");
+    if (probe) {
+        fclose(probe);
+        return window != nullptr;
+    }
     return window ? atomic_load_explicit(&(*window).liveResizing, memory_order_relaxed) : false;
 }
 
@@ -2071,4 +2226,8 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
         return;
     (*window).resizeRenderFn = fn;
     (*window).resizeRenderUserdata = userdata;
+}
+
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
+    return window ? (*window).resizeRenderFn : nullptr;
 }

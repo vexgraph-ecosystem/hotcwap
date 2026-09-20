@@ -54,10 +54,29 @@
 #include "input/mouse.h"
 #include "input/touch.h"
 #include "buffer/buffer.h"
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/intention.h"
 #include "annotation/draft.h"
 #include "annotation/platform_exclusive.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Window_wayland
+ * ============================================================================
+ * Wayland/XDG desktop window abstraction implementation mirroring Cocoa capabilities.
+ * Manages wl_surface, xdg_surface, and xdg_toplevel primitives, routing Wayland
+ * seat input into vexspoke device rings and dispatching surface configure events
+ * through the embedded WindowEvent lifecycle handlers.
+ *
+ * Implements the Window Decoupling Law as a presentation surface and event
+ * bridge decoupled from GPU drivers, featuring a lean wl_shm software presentation
+ * seam alongside inert compatibility stubs.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -65,15 +84,16 @@
  * CLASS: Window (window/window_wayland.c)
  * LEVEL: L4 — Self-Management (Wayland OS window shim owned by the OS)
  * ============================================================================
- * DRAFT Wayland mirror of the AppKit window backend. One opaque C handle per
- * wl_surface + xdg_toplevel; the engine loop constructs it, configures the
- * chrome, commits it, then pumps Window_pollEvents once per frame while a
- * render path draws through the software present seam (wl_shm) / event
- * bridges. OS input is routed into the vexspoke device rings (tagged with
- * this window's id); OS lifecycle (quit, resize, fullscreen, minimize,
- * restore, press, focus) fires the embedded WindowEvent. Zero Vulkan, zero
- * compositing — a Window is a dumb surface + callback bridge per the Window
- * Decoupling Law.
+ * SUMMARY:
+ *   DRAFT Wayland mirror of the AppKit window backend. One opaque C handle per
+ *   wl_surface + xdg_toplevel; the engine loop constructs it, configures the
+ *   chrome, commits it, then pumps Window_pollEvents once per frame while a
+ *   render path draws through the software present seam (wl_shm) / event
+ *   bridges. OS input is routed into the vexspoke device rings (tagged with
+ *   this window's id); OS lifecycle (quit, resize, fullscreen, minimize,
+ *   restore, press, focus) fires the embedded WindowEvent. Zero Vulkan, zero
+ *   compositing — a Window is a dumb surface + callback bridge per the Window
+ *   Decoupling Law.
  *
  * STRUCT FIELDS (Mirroring window/window.h incomplete tag — completed here):
  * ----------------------------------------------------------------------------
@@ -131,44 +151,82 @@
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
+ * Public Constructors: (.h)
  *   - Window_0(void)                        : Window_new(nullptr)
  *   - Window_1(title)                       : Window_new(&{ .title })
  *   - Window_3(title, width, height)
  *   - Window_new(desc)                      : descResolve + waylandAlloc + show
  *   - Window_create(title, width, height)
  *
- * Core Functions:
+ * Private Constructors: (.c static)
+ *   - waylandAlloc(desc)                    : shared internal constructor
+ *   - descResolve(desc)                     : default parameter resolution
+ *
+ * Public Core Functions: (.h)
  *   - Window_destroy(window)                : detach, surface free, handle free
+ *   - Window_destroyAll(void)
  *   - Window_shouldClose(window)
  *   - Window_pollEvents(void)               : non-blocking wl_display drain
- *   - xdgSurfaceConfigure / toplevelConfigure / pointer* / keyboard* / touch*
- *   - Window_width(window) / Window_height(window)
- *   - Window_dispatchEvents(window)
- *   - Window_compositePanes(window)         : inert (;;INTENTION)
+ *   - Window_width(window)
+ *   - Window_height(window)
+ *   - Window_center(window)
+ *   - Window_show(window)
+ *   - Window_hide(window)
+ *   - Window_attachPanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_resizePanes(window, panel, width, height) : inert (;;INTENTION)
+ *   - Window_compositePanes(window, contentPanel)      : inert (;;INTENTION)
  *   - Window_compositeBoards(window)        : inert (;;INTENTION)
  *   - Window_orderLayers(window)            : inert (;;INTENTION)
- *   - Window_attachPanes/resizePanes        : inert (;;INTENTION)
- *   - Window_present(window, frame)         : lean wl_shm software path
- *   - Window_workerPresentBegin/End         : inert (;;INTENTION)
+ *   - Window_renderGeneration(window)
+ *   - Window_bringToFront(window)           : no base protocol (;;INTENTION)
+ *   - Window_minimize(window)               : xdg_toplevel_set_minimized
+ *   - Window_restore(window)
+ *   - Window_toggleFullscreen(window)
  *   - Window_contentView(window)            : returns the wl_surface anchor
+ *   - Window_nativeHandle(window)
  *   - Window_metalLayer(window)             : nullptr — no Metal here
+ *   - Window_present(window, frame)         : lean wl_shm software path
+ *   - Window_workerPresentBegin(window)     : inert (;;INTENTION)
+ *   - Window_workerPresentEnd(window)       : inert (;;INTENTION)
+ *   - Window_addKeyAdapter(window, adapter)
+ *   - Window_removeKeyAdapter(window, adapter)
+ *   - Window_addMouseAdapter(window, adapter)
+ *   - Window_removeMouseAdapter(window, adapter)
+ *   - Window_addTouchAdapter(window, adapter)
+ *   - Window_removeTouchAdapter(window, adapter)
+ *   - Window_addWindowAdapter(window, adapter)
+ *   - Window_removeWindowAdapter(window, adapter)
+ *   - Window_dispatchEvents(window)
+ *   - Window_id(window)
+ *   - Window_focus(window)                  : no base protocol (;;INTENTION)
+ *   - Window_sizeGeneration(window)
  *
- * Setters:
+ * Private Core Functions: (.c static)
+ *   - xdgSurfaceConfigure / toplevelConfigure / pointer* / keyboard* / touch*
+ *
+ * Public Setters: (.h)
+ *   - Window_setShouldClose(window, shouldClose)
  *   - Window_setTitle(window, title)
  *   - Window_setSize(window, width, height)
  *   - Window_setLocation(window, x, y)      : xdg has no shell positioning
- *   - Window_center(window)
- *   - Window_show(window) / Window_hide(window) / Window_setVisible(window, v)
- *   - Window_setTopLayer/BottomLayer(window, layer)
+ *   - Window_setVisible(window, visible)
+ *   - Window_setTopLayer(window, layer)
+ *   - Window_setBottomLayer(window, layer)
  *   - Window_setPresentMode(window, mode)
  *   - Window_setTransparent(window, transparent)
  *   - Window_setEnabled(window, enabled)
- *   - Window_setResizable/Closable/Miniaturizable(window, flag) : SSD-owned
+ *   - Window_setKeyEnabled(window, enabled)
+ *   - Window_setResizable(window, resizable) : SSD-owned
+ *   - Window_setClosable(window, closable)   : SSD-owned
+ *   - Window_setMiniaturizable(window, miniaturizable) : SSD-owned
  *   - Window_setFullscreenButton(window, enabled) : SSD-owned
  *   - Window_setUndecorated(window, mode)
+ *   - Window_setDecorated(window, decorated)
+ *   - Window_setNaked(window, naked)
+ *   - Window_setBorderless(window, borderless)
  *   - Window_setFloatingTrafficLights(window, floating) : macOS-only no-op
- *   - Window_macOS_setTrafficLightButtonVisible/HeaderPosition : macOS-only stub
+ *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible) : macOS-only stub
+ *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y) : macOS-only stub
  *   - Window_setOpacity(window, opacity)    : stored (;;INTENTION)
  *   - Window_setTransparentBackground(window, transparent)
  *   - Window_setBlur(window, blur)          : stored (;;INTENTION — no base proto)
@@ -176,39 +234,49 @@
  *   - Window_setClickThrough(window, clickThrough) : empty input region
  *   - Window_setShadow(window, shadow)      : stored (;;INTENTION)
  *   - Window_setMovableByBackground(window, movable) : stored (;;INTENTION)
- *   - Window_bringToFront(window)           : no base protocol (;;INTENTION)
- *   - Window_minimize(window)               : xdg_toplevel_set_minimized
- *   - Window_restore(window)
- *   - Window_setFullscreen(window, fullscreen) / Window_toggleFullscreen(window)
+ *   - Window_setFullscreen(window, fullscreen)
  *   - Window_setDRM(window, enabled)        : no-op (;;INTENTION — macOS concept)
- *   - Window_setMinSize/MaxSize(window, width, height) : xdg min/max size
+ *   - Window_setMinSize(window, width, height) : xdg min size
+ *   - Window_setMaxSize(window, width, height) : xdg max size
  *   - Window_setCursorType(window, type)
  *   - Window_setCursorLocked(window, locked) : hidden cursor + delta warp note
  *   - Window_setResizeRenderHook(window, fn, userdata)
- *   - Window_addKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
- *   - Window_focus(window)                  : no base protocol (;;INTENTION)
  *   - Window_setGravityTopLeft(window)      : no-op (;;INTENTION)
  *
- * Getters:
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
  *   - Window_getLocation(window, outX, outY)     : last known offset (stored)
  *   - Window_getContentOrigin(window, outX, outY)
- *   - Window_getTopLayer/BottomLayer(window)
+ *   - Window_getTopLayer(window)
+ *   - Window_getBottomLayer(window)
  *   - Window_getPresentMode(window)
  *   - Window_isTransparent(window)
  *   - Window_renderGeneration(window)
  *   - Window_isEnabled(window)
+ *   - Window_isKeyEnabled(window)
  *   - Window_isLiveResizing(window)
- *   - Window_isResizable/Closable/Miniaturizable(window)
- *   - Window_macOS_isTrafficLightButtonVisible/HeaderPosition : macOS-only stub
+ *   - Window_isResizable(window)
+ *   - Window_isClosable(window)
+ *   - Window_isMiniaturizable(window)
+ *   - Window_isDecorated(window)
+ *   - Window_isNaked(window)
+ *   - Window_isBorderless(window)
+ *   - Window_macOS_isTrafficLightButtonVisible(window, light) : macOS-only stub
+ *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY) : macOS-only stub
  *   - Window_isMinimized(window)
  *   - Window_isFullscreen(window)
  *   - Window_getCursorType(window)
- *   - Window_removeKeyAdapter/MouseAdapter/TouchAdapter(window, adapter)
  *   - Window_id(window)
  *   - Window_isFocused(window)
  *   - Window_getLifecycle(window)
  *   - Window_getMonitorId(window)
  *   - Window_sizeGeneration(window)
+ *   - Window_getResizeRenderHook(window)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 ;;PLATFORM_EXCLUSIVE("Wayland")
@@ -2039,6 +2107,10 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
         return;
     (*window).resizeRenderFn = fn;
     (*window).resizeRenderUserdata = userdata;
+}
+
+WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
+    return window ? (*window).resizeRenderFn : nullptr;
 }
 
 #endif // __linux__
