@@ -7,8 +7,37 @@
 #include <time.h>
 
 #include "annotation/intention.h"
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+#include "input/key.h"
+#include "input/mouse.h"
 #include "window/window.h"
+#include "spoke/bespoke.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Kernel
+ * ============================================================================
+ * R1 Host Supervisor: storage and dispatch for executable components across the
+ * ecosystem. Owns the master lifetime memory substrate, transient arenas, and the
+ * three per-kind registries (processes, applications, consoles). The Kernel owns
+ * no execution loops, render ticks, or worker threads; Kernel_run forwards each
+ * registered kind to its own run method, allowing dynamic module swapping without
+ * supervisor restarts.
+ *
+ * Memory layout comprises master and transient arena handles, fixed-capacity
+ * arrays for windowed applications, one-shot processes, and interactive consoles,
+ * alongside a thread-safe deferred-add mailbox and supervised worker run slots.
+ *
+ * Operational invariants: the Terminal-Run Contract enforces that Thread 0 cannot
+ * mutate registries once Kernel_runAll arms, redirecting off-thread additions to
+ * the mutex-guarded deferred mailbox. Completion occurs reactively when all
+ * registered children report finished status, followed by ordered teardown.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -16,13 +45,14 @@
  * CLASS: Kernel (kernel/kernel.c)
  * LEVEL: L4 — Self-Management (R1 Host; the Vertical Integration Law vs the Four System Levels Law: L = edit-risk, R = supervision)
  * ============================================================================
- * R1 Host Supervisor: STORAGE + DISPATCH, never an executor. Owns the master
- * session arena, the transient scratch arena, and the three per-kind
- * registries (processes / applications / consoles). Kernel_run is a thin
- * reference forward that hands each registered kind to its own run function;
- * the Kernel owns NO loop, NO tick, and NO worker thread. Frame scheduling,
- * the event pump, and presentation live in graphvex's GfxLoop (the Vertical
- * Integration Law / the Window Decoupling Law).
+ * SUMMARY:
+ *   R1 Host Supervisor: STORAGE + DISPATCH, never an executor. Owns the master
+ *   session arena, the transient scratch arena, and the three per-kind
+ *   registries (processes / applications / consoles). Kernel_run is a thin
+ *   reference forward that hands each registered kind to its own run function;
+ *   the Kernel owns NO loop, NO tick, and NO worker thread. Frame scheduling,
+ *   the event pump, and presentation live in graphvex's GfxLoop (the Vertical
+ *   Integration Law / the Window Decoupling Law).
  *
  * STRUCT FIELDS (Mirroring kernel/kernel.h — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -65,33 +95,70 @@
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
- *   - Kernel()                            : Kernel_0()
- *   - Kernel(arenaBytes)                  : Kernel_1(arenaBytes)
- *   - Kernel(arenaBytes, transientBytes)  : Kernel_2(arenaBytes, transientBytes)
+ * Public Constructors: (.h)
+ *   - Kernel()                                : Kernel_0()
+ *   - Kernel(arenaBytes)                      : Kernel_1(arenaBytes)
+ *   - Kernel(arenaBytes, transientBytes)      : Kernel_2(arenaBytes, transientBytes)
  *
- * Core Functions:
- *   - Kernel_destroy(self)   : legacy shim over free
- *   - Kernel_free(self)
- *   - Kernel_stop(self)      : stop apps, cancel consoles, invoke end functions, clear running
- *   - Kernel_isRunning(self) : terminal-run armed?
- *   - Kernel_runAll(self)    : completion reactor (arm -> dispatch -> supervise
- *                              -> drain deferred -> invoke end functions -> disarm)
- *   - Kernel_runProcess(self, p)     : forward to Process_run
- *   - Kernel_runConsole(self, c)     : forward to Console_run
- *   - Kernel_runApplication(self, a) : start + forward to graphvex GfxLoop
- *   - Kernel_run(...)         (arity macro: 1 arg -> runAll, 2 args -> dispatch by type)
- *   - Kernel_addApplication / removeApplication / getters (add* honors the
- *     Terminal-Run Contract: armed-thread refusal + off-thread mailbox post)
- *   - Kernel_addProcess / removeProcess / getters
- *   - Kernel_addConsole / removeConsole / getters
- *   - Kernel_addRunFunction / Kernel_addEndFunction / getters
+ * Private Constructors: (.c static)
+ *   - (none)
  *
- * Getters:
- *   - Kernel_getArena(self)
- *   - Kernel_getTransientArena(self)
- *   - Kernel_getRunFunctionCount(self)
- *   - Kernel_getEndFunctionCount(self)
+ * Public Core Functions: (.h)
+ *   - Kernel_destroy(self)                    : Legacy shim over free
+ *   - Kernel_free(self)                       : Release supervision and arenas
+ *   - Kernel_stop(self)                       : Transition to draining and stop children
+ *   - Kernel_runAll(self)                     : Completion reactor supervising children
+ *   - Kernel_runProcess(self, p)              : Dispatch to Process_run
+ *   - Kernel_runConsole(self, c)              : Dispatch to Console_run
+ *   - Kernel_runApplication(self, a)          : Dispatch to Application_run
+ *   - Kernel_addApplication(self, app)        : Register windowed application
+ *   - Kernel_removeApplication(self, app)     : Unregister windowed application
+ *   - Kernel_addProcess(self, p)              : Register one-shot process
+ *   - Kernel_removeProcess(self, p)           : Unregister one-shot process
+ *   - Kernel_addConsole(self, c)              : Register interactive console
+ *   - Kernel_removeConsole(self, c)           : Unregister interactive console
+ *   - Kernel_addRunFunction(self, fn, user)   : Register background worker function
+ *   - Kernel_addEndFunction(self, fn, user)   : Register completion lifecycle hook
+ *
+ * Private Core Functions: (.c static)
+ *   - kernelRunActive(self)                   : Test if kernel is currently running or draining
+ *   - kernelPostDeferred(self, kind, ptr)     : Post registration to off-thread mailbox
+ *   - kernelDrainDeferred(self)               : Drain mailbox onto main thread
+ *   - kernelAddApplicationInternal(self, app) : Direct application registration
+ *   - kernelAddProcessInternal(self, p)       : Direct process registration
+ *   - kernelAddConsoleInternal(self, c)       : Direct console registration
+ *   - kernelAllDone(self)                     : Evaluate if all children completed
+ *   - kernelStartApplication(app)             : Launch application windows
+ *   - kernelFireEndHooks(self)                : Execute lifecycle completion callbacks
+ *   - kernelRunWorkerMain(arg)                : Worker thread dispatch wrapper
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - Kernel_getPhase(self)                   : Current lifecycle phase
+ *   - Kernel_isRunning(self)                  : Query if run is live
+ *   - Kernel_getApplication(self, index)      : Retrieve application by index
+ *   - Kernel_getApplicationCount(self)        : Count of registered applications
+ *   - Kernel_getApplications(self, out, cap)  : Copy application handles
+ *   - Kernel_getProcess(self, index)          : Retrieve process by index
+ *   - Kernel_getProcessCount(self)            : Count of registered processes
+ *   - Kernel_getProcesses(self, out, cap)     : Copy process handles
+ *   - Kernel_getConsole(self, index)          : Retrieve console by index
+ *   - Kernel_getConsoleCount(self)            : Count of registered consoles
+ *   - Kernel_getConsoles(self, out, cap)      : Copy console handles
+ *   - Kernel_getRunFunctionCount(self)        : Count of run functions
+ *   - Kernel_getEndFunctionCount(self)        : Count of end functions
+ *   - Kernel_getArena(self)                   : Master arena handle
+ *   - Kernel_getTransientArena(self)          : Scratch arena handle
+ *   - Kernel_getLifetime(self)                : Lifetime pointer
+ *   - Kernel_lifetime(self)                   : Const lifetime pointer
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -562,6 +629,8 @@ int Kernel_runAll(Kernel *self) {
     for (uint32_t i = 0; i < (*self).applicationCount; i++)
         kernelStartApplication(self, (*self).applications[i]);
 
+    bridgeBespoke();
+
     // COMPLETION REACTOR: drain deferred adds, pump OS events, supervise
     // bounded console slices, ask app closed-state at a ~250ms cadence. 5ms
     // per pass keeps teardown responsive (the Bounded Wait Law) without a
@@ -572,6 +641,7 @@ int Kernel_runAll(Kernel *self) {
         kernelDrainDeferred(self);
 
         Window_pollEvents();
+        bridgeBespokeCheck();
 
         char buf[4096];
         for (uint32_t i = 0; i < (*self).consoleCount; i++) {
@@ -661,22 +731,40 @@ static bool kernelGfxAppContinues(void *context) {
     if (!a)
         return false;
     Application_pollHot(a);
+    bridgeBespokeCheck();
     return !Application_isFinished(a);
+}
+
+// Thread-0 pump handed to graphvex's frame loop. Window_pollEvents only
+// MIRRORS the OS queue into vexspoke's input rings — dispatching those rings
+// to registered listeners (the widget bridge) is a separate step. Without
+// this pass, a window that pumps events still never delivers a single click
+// or keystroke to any listener. hotcwap owns the pump (the Window Decoupling
+// Law); vexspoke owns the ring and its dispatch (R2).
+static void kernelGfxPump(void) {
+    Window_pollEvents();
+    Key_dispatchEvents();
+    Mouse_dispatchEvents();
 }
 
 int Kernel_runApplication(Kernel *self, Application *a) {
     if (!self || !a)
         return KERNEL_EXIT_NO_APPS;
     kernelStartApplication(self, a);
+    bridgeBespoke();
 
     // If graphvex's GfxLoop is linked, hand the application to the demand-driven
     // frame scheduler loop: completion + hot servicing stay HERE (R1), the
     // frame loop + Thread-0 event pump stay THERE (R3). Otherwise, fall back
-    // to hotcwap's parked loop.
+    // to hotcwap's parked loop. bridgeBespoke only arms the fallback branch —
+    // when the GfxLoop owns the run, its first step IS runGraphics(); calling
+    // bridgeBespoke here too runs one stray GraphicsLoop_step before the loop
+    // even sets running (a duplicated infancy present).
     if (GfxLoop_runApplication != nullptr) {
-        return GfxLoop_runApplication(a, kernelGfxAppContinues, Window_pollEvents);
+        return GfxLoop_runApplication(a, kernelGfxAppContinues, kernelGfxPump);
     }
 
+    bridgeBespoke();
     Application_run(a);
     return KERNEL_EXIT_OK;
 }
@@ -822,19 +910,22 @@ bool Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata) {
     return true;
 }
 
+// GETTERS (PUBLIC & PRIVATE)
+;;GETTER
 uint32_t Kernel_getRunFunctionCount(const Kernel *self) {
     if (!self)
         return 0;
     return (*self).runCount;
 }
 
+;;GETTER
 uint32_t Kernel_getEndFunctionCount(const Kernel *self) {
     if (!self)
         return 0;
     return (*self).endCount;
 }
 
-// GETTERS
+;;GETTER
 Application *Kernel_getApplication(const Kernel *self, uint32_t index) {
     if (!self)
         return NULL;
@@ -843,12 +934,14 @@ Application *Kernel_getApplication(const Kernel *self, uint32_t index) {
     return (*self).applications[index];
 }
 
+;;GETTER
 uint32_t Kernel_getApplicationCount(const Kernel *self) {
     if (!self)
         return 0;
     return (*self).applicationCount;
 }
 
+;;GETTER
 uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -859,6 +952,7 @@ uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t 
     return n;
 }
 
+;;GETTER
 Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
     if (!self)
         return NULL;
@@ -867,12 +961,14 @@ Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
     return (*self).processes[index];
 }
 
+;;GETTER
 uint32_t Kernel_getProcessCount(const Kernel *self) {
     if (!self)
         return 0;
     return (*self).processCount;
 }
 
+;;GETTER
 uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -883,6 +979,7 @@ uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
     return n;
 }
 
+;;GETTER
 Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
     if (!self)
         return NULL;
@@ -891,12 +988,14 @@ Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
     return (*self).consoles[index];
 }
 
+;;GETTER
 uint32_t Kernel_getConsoleCount(const Kernel *self) {
     if (!self)
         return 0;
     return (*self).consoleCount;
 }
 
+;;GETTER
 uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -907,22 +1006,26 @@ uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
     return n;
 }
 
+;;GETTER
 void *Kernel_getArena(const Kernel *self) {
     if (!self)
         return NULL;
     return (*self).arena;
 }
 
+;;GETTER
 void *Kernel_getTransientArena(const Kernel *self) {
     if (!self)
         return NULL;
     return (*self).transientArena;
 }
 
+;;GETTER
 Lifetime *Kernel_getLifetime(Kernel *self) {
     return self ? &(*self).lifetime : NULL;
 }
 
+;;GETTER
 const Lifetime *Kernel_lifetime(const Kernel *self) {
     return self ? &(*self).lifetime : NULL;
 }
