@@ -2,41 +2,90 @@
 
 #include <stdlib.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Process
+ * ============================================================================
+ * Represents a single, replaceable caller-thread execution entry. Serves as
+ * the minimal invocation abstraction for one-shot CLI tasks or hot-swappable
+ * discrete procedures, decoupling function execution from thread management.
+ *
+ * Process maintains atomic references to its entry function, borrowed context,
+ * optional hot-reload module association, and execution telemetry. An atomic
+ * occupancy gate ensures that executions and runtime replacements never race
+ * or wait, failing fast with PROCESS_BUSY when contended.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
+ * ============================================================================
  * CLASS: Process (kernel/process.c)
  * LEVEL: L2 — Behavior (one replaceable caller-thread entry)
+ * ============================================================================
+ * SUMMARY:
+ *   One caller-thread invocation at a time. Name, context, and hot association
+ *   are borrowed; code and data must remain live while referenced. No module
+ *   pin, thread, or cancellation mechanism is created here.
  *
- * STRUCT FIELDS (kernel/process.h):
+ * STRUCT FIELDS (Mirroring kernel/process.h — exactly this file's class):
+ * ----------------------------------------------------------------------------
  *   _Atomic(ProcessEntry) entry;   // current callback
- *   _Atomic(void*) context;       // borrowed callback data
- *   _Atomic(void*) hot;           // borrowed association, NOT a module pin
- *   _Atomic(const char*) name;    // borrowed immutable label
- *   atomic_bool occupied;        // non-waiting admission gate
- *   atomic_bool inFlight;        // callback execution telemetry
- *   atomic_uint invocationCount; // completed callbacks
+ *   _Atomic(void*) context;        // borrowed callback data
+ *   _Atomic(void*) hot;            // borrowed association, NOT a module pin
+ *   _Atomic(const char*) name;     // borrowed immutable label
+ *   atomic_bool occupied;          // non-waiting admission gate
+ *   atomic_bool inFlight;          // callback execution telemetry
+ *   atomic_uint invocationCount;   // completed callbacks
  *
- * CONSTRUCTORS: Process(entry), Process(entry, context),
- *   Process(name, entry, context) dispatch to Process_1 / Process_2 / Process_3.
- * CORE: Process_run(self, exitStatus), Process_free(self).
- * SETTERS: Process_replace(self, entry, context, hot), Process_setName(self, name).
- * GETTERS: Process_getEntry, Process_getContext, Process_getHot, Process_getName,
- *   Process_isRunning, Process_getInvocationCount.
- * PRIVATE HELPERS: none.
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
  *
- * Run and replacement claim the same gate once, never spin or wait. Failed
- * admission leaves output/binding unchanged. Entry/context/hot mutate together
- * under the gate; individual getters are atomic observations, not a snapshot.
- * Binding setters are deliberately combined to preserve their relationship.
- * Telemetry is read-only. Null entry is rejected; null context/name/hot allowed.
- * Borrowed storage/code outlives its uses; external exclusion is required at
- * free. Callbacks must return normally (no longjmp/thread exit across this API).
- * Generation pinning and unloading remain a loader integration task.
+ * FUNCTION REGISTRY:
+ * ----------------------------------------------------------------------------
+ * Public Constructors: (.h)
+ *   - Process(entry)                          : Process_1(entry)
+ *   - Process(entry, context)                 : Process_2(entry, context)
+ *   - Process(name, entry, context)           : Process_3(name, entry, context)
+ *
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
+ *   - Process_run(self, exitStatus)           : Claim gate and run entry callback
+ *   - Process_free(self)                      : Claim gate and free memory
+ *
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - Process_replace(self, entry, ctx, hot)  : Atomic multi-field binding replace
+ *   - Process_setName(self, name)             : Atomic label assignment
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - Process_isRunning(self)                 : Telemetry in-flight observation
+ *   - Process_getInvocationCount(self)        : Telemetry completed callback count
+ *   - Process_getEntry(self)                  : Current entry function pointer
+ *   - Process_getContext(self)                : Current context pointer
+ *   - Process_getHot(self)                    : Current hot module association
+ *   - Process_getName(self)                   : Current process name
+ *
+ * Private Getters: (.c static)
+ *   - (none)
+ * ============================================================================
  */
 
-// CONSTRUCTORS
+// CONSTRUCTORS (PUBLIC & PRIVATE)
 Process *Process_1(ProcessEntry entry) {
     return Process_3(nullptr, entry, nullptr);
 }
@@ -61,7 +110,7 @@ Process *Process_3(const char *name, ProcessEntry entry, void *context) {
     return self;
 }
 
-// CORE FUNCTIONS
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 ProcessResult Process_run(Process *self, int *exitStatus) {
     if (!self || !exitStatus)
         return PROCESS_INVALID;
@@ -90,7 +139,8 @@ bool Process_free(Process *self) {
     return true;
 }
 
-// SETTERS
+// SETTERS (PUBLIC & PRIVATE)
+;;SETTER
 ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, void *hot) {
     if (!self || !entry)
         return PROCESS_INVALID;
@@ -105,6 +155,7 @@ ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, 
     return PROCESS_OK;
 }
 
+;;SETTER
 ProcessResult Process_setName(Process *self, const char *name) {
     if (!self)
         return PROCESS_INVALID;
@@ -117,27 +168,34 @@ ProcessResult Process_setName(Process *self, const char *name) {
     return PROCESS_OK;
 }
 
-// GETTERS
+// GETTERS (PUBLIC & PRIVATE)
+;;GETTER
 bool Process_isRunning(const Process *self) {
     return self ? atomic_load_explicit(&(*self).inFlight, memory_order_acquire) : false;
 }
 
+;;GETTER
 uint32_t Process_getInvocationCount(const Process *self) {
     return self ? atomic_load_explicit(&(*self).invocationCount, memory_order_relaxed) : 0;
 }
 
+;;GETTER
 ProcessEntry Process_getEntry(const Process *self) {
     return self ? atomic_load_explicit(&(*self).entry, memory_order_relaxed) : nullptr;
 }
 
+;;GETTER
 void *Process_getContext(const Process *self) {
     return self ? atomic_load_explicit(&(*self).context, memory_order_relaxed) : nullptr;
 }
 
+;;GETTER
 void *Process_getHot(const Process *self) {
     return self ? atomic_load_explicit(&(*self).hot, memory_order_relaxed) : nullptr;
 }
 
+;;GETTER
 const char *Process_getName(const Process *self) {
     return self ? atomic_load_explicit(&(*self).name, memory_order_relaxed) : nullptr;
 }
+
