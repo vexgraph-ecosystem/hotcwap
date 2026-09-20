@@ -4,29 +4,49 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Lifetime
+ * ============================================================================
+ * Memory substrate abstraction bridging R1 host execution with R2 persistent
+ * and transient memory arenas. hotcwap operates purely on opaque void* pointers
+ * without including vexspoke headers, preserving decoupling while strictly
+ * validating pointer legitimacy (16-byte alignment, non-null, user address range >= 64KB).
+ *
+ * Lifetime encapsulates the persistent session arena, per-tick transient scratch
+ * arena, provider type attestations, and relational root. Allocations and binds
+ * verify memory consistency across module reloads, ensuring zero heap corruption.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
  * ============================================================================
  * CLASS: Lifetime (spoke/lifetime.c — defined in spoke/lifetime.h)
- * LEVEL: L2 — Behavior (R1→R2 memory & relational substrate lifecycle)
+ * LEVEL: L2 — Behavior (R1 to R2 memory and relational substrate lifecycle)
  * ============================================================================
- * Provides the memory substrate for the hotcwap host nano-VM, dedicated strictly
- * to vexspoke (and vexspoke only). Owns the master persistent arena and the
- * per-tick transient scratch arena as opaque void* handles.
+ * SUMMARY:
+ *   Provides the memory substrate for the hotcwap host nano-VM, dedicated strictly
+ *   to vexspoke (and vexspoke only). Owns the master persistent arena and the
+ *   per-tick transient scratch arena as opaque void* handles.
  *
- * R1 Host (hotcwap) NEVER includes vexspoke headers (e.g. nio/mem.h). Instead,
- * hotcwap treats all memory pointers as opaque void* and actively enforces
- * pointer legitimacy via Lifetime_isLegit:
- *   1. Non-null pointer check
- *   2. 16-byte alignment doctrine ((uintptr_t)ptr & 15 == 0)
- *   3. Valid user address range (ptr >= 0x10000 to avoid null/guard pages)
+ *   R1 Host (hotcwap) NEVER includes vexspoke headers (e.g. nio/mem.h). Instead,
+ *   hotcwap treats all memory pointers as opaque void* and actively enforces
+ *   pointer legitimacy via Lifetime_isLegit:
+ *     1. Non-null pointer check
+ *     2. 16-byte alignment doctrine ((uintptr_t)ptr & 15 == 0)
+ *     3. Valid user address range (ptr >= 0x10000 to avoid null/guard pages)
  *
- * All allocations and bindings are validated through Lifetime_isLegit and
- * Lifetime_isValid to ensure memory integrity across dynamic hot-reloads.
+ *   All allocations and bindings are validated through Lifetime_isLegit and
+ *   Lifetime_isValid to ensure memory integrity across dynamic hot-reloads.
  *
- * STRUCT FIELDS (Mirroring spoke/lifetime.h):
+ * STRUCT FIELDS (Mirroring spoke/lifetime.h — exactly this file's class):
  * ----------------------------------------------------------------------------
  *   void *persistentArena;    // master session arena (opaque void*)
  *   void *transientArena;     // per-tick scratch arena (opaque void*)
@@ -34,22 +54,42 @@
  *   uint64_t transientType;   // VEXSPOKE_TYPE_ARENA (nonzero = attested)
  *   void *relational;         // relational symbol root (opaque void*)
  *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Pointer Legitimacy:
- *   - Lifetime_isLegit(ptr)
- *   - Lifetime_isValid(lifetime)
+ * Public Constructors: (.h)
+ *   - Lifetime_create(persistentBytes, transientBytes) : Allocate verified pair of arenas
+ *   - Lifetime_bind(pArena, tArena, pType, tType, rel) : Wrap external verified arenas
  *
- * Lifecycle:
- *   - Lifetime_create(persistentBytes, transientBytes)
- *   - Lifetime_destroy(lifetime)
- *   - Lifetime_resetTransient(lifetime)
- *   - Lifetime_bind(persistentArena, transientArena, persistentType, transientType, relational)
+ * Private Constructors: (.c static)
+ *   - (none)
  *
- * Allocators:
- *   - Lifetime_allocPersistent(lifetime, typeId, bytes)
- *   - Lifetime_allocTransient(lifetime, typeId, bytes)
- *   - Lifetime_freePersistent(lifetime, ptr)
+ * Public Core Functions: (.h)
+ *   - Lifetime_isLegit(ptr)                            : Verify 16B alignment & user address
+ *   - Lifetime_isValid(lifetime)                       : Validate arena handles and types
+ *   - Lifetime_destroy(lifetime)                       : Release arena resources
+ *   - Lifetime_resetTransient(lifetime)                : Free all scratch allocations
+ *   - Lifetime_allocPersistent(lifetime, type, bytes)  : Allocate from master arena
+ *   - Lifetime_allocTransient(lifetime, type, bytes)   : Allocate from scratch arena
+ *   - Lifetime_freePersistent(lifetime, ptr)           : Free master arena allocation
+ *
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - (none)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -61,41 +101,7 @@ extern void MemoryArena_freeAll(void *arena);
 extern void *MemoryArena_alloc(void *arena, uint64_t typeId, size_t numBytes);
 extern void MemoryArena_free(void *arena, void *ptr);
 
-bool Lifetime_isLegit(const void *ptr) {
-    if (ptr == nullptr) {
-        return false;
-    }
-    uintptr_t addr = (uintptr_t) ptr;
-    // 16-byte arena alignment doctrine
-    if ((addr & 15) != 0) {
-        return false;
-    }
-    // Guard page avoidance: valid user-space pointer must be >= 64KB (0x10000)
-    if (addr < 0x10000ULL) {
-        return false;
-    }
-    return true;
-}
-
-bool Lifetime_isValid(const Lifetime *lifetime) {
-    if (lifetime == nullptr) {
-        return false;
-    }
-    if (!Lifetime_isLegit((*lifetime).persistentArena)) {
-        return false;
-    }
-    if (!Lifetime_isLegit((*lifetime).transientArena)) {
-        return false;
-    }
-    if ((*lifetime).persistentType == 0 || (*lifetime).transientType == 0) {
-        return false;
-    }
-    if ((*lifetime).relational != nullptr && !Lifetime_isLegit((*lifetime).relational)) {
-        return false;
-    }
-    return true;
-}
-
+// CONSTRUCTORS (PUBLIC & PRIVATE)
 Lifetime Lifetime_create(size_t persistentBytes, size_t transientBytes) {
     Lifetime lt = {0};
     if (persistentBytes == 0)
@@ -143,6 +149,42 @@ Lifetime Lifetime_bind(void *persistentArena, void *transientArena,
         return zero;
     }
     return lt;
+}
+
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
+bool Lifetime_isLegit(const void *ptr) {
+    if (ptr == nullptr) {
+        return false;
+    }
+    uintptr_t addr = (uintptr_t) ptr;
+    // 16-byte arena alignment doctrine
+    if ((addr & 15) != 0) {
+        return false;
+    }
+    // Guard page avoidance: valid user-space pointer must be >= 64KB (0x10000)
+    if (addr < 0x10000ULL) {
+        return false;
+    }
+    return true;
+}
+
+bool Lifetime_isValid(const Lifetime *lifetime) {
+    if (lifetime == nullptr) {
+        return false;
+    }
+    if (!Lifetime_isLegit((*lifetime).persistentArena)) {
+        return false;
+    }
+    if (!Lifetime_isLegit((*lifetime).transientArena)) {
+        return false;
+    }
+    if ((*lifetime).persistentType == 0 || (*lifetime).transientType == 0) {
+        return false;
+    }
+    if ((*lifetime).relational != nullptr && !Lifetime_isLegit((*lifetime).relational)) {
+        return false;
+    }
+    return true;
 }
 
 void Lifetime_destroy(Lifetime *lifetime) {
