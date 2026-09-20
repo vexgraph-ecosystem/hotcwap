@@ -13,24 +13,41 @@
 
 | Law Title | Scope | Enforcement |
 | :--- | :--- | :--- |
-| **Two-Layer Split Window Architecture Law** | R1 Kernel Host | Mandatory for `hotcwap` |
+| **One-Seam Canvas Window Architecture Law** | R1 Kernel Host | Mandatory for `hotcwap` |
 | **Continuous Real-Time Live Resize & Presentation Law (Abolishing "Freeze-Exact")** | R1 Kernel Host | Mandatory for `hotcwap` |
 | **Present-On-Demand Law (composite ≠ render)** | R1 Kernel Host | Mandatory for `hotcwap` |
 | **Dynamic Module ABI Verification Law** | R1 Kernel Host | Mandatory for `hotcwap` |
 
 ## 2. Exclusive Repo-Local Laws (FULL PROSE RESTATEMENT)
 
-### Two-Layer Split Window Architecture Law
+### One-Seam Canvas Window Architecture Law
 
 #### Definition:
-The host window composite is strictly partitioned into two layers: the bottom layer is the direct Vulkan swapchain surface (or transparent `NSVisualEffectView` blur substrate), and the top layer is composed of hardware `CALayer`s backed by zero-copy `IOSurface` allocations.
+The host window composite owns exactly ONE on-screen Metal layer — the seam
+canvas (`CAMetalLayer`) — beneath an optional transparent `NSVisualEffectView`
+blur substrate. All Vulkan-rendered boards (scene backdrop, content UI) are
+retained OFFSCREEN targets composited into the seam image by the render repo
+(the Window Compositing Layer Order Law + the Single-Seam Canvas Law); no
+per-scene or per-widget `CALayer`, no IOSurface-backed UI surfaces, no
+per-pane swapchains exist anywhere in the tree.
 
 #### The Why:
-Mixing UI presentation directly into the Vulkan render loop creates swapchain contention and forces full-frame redraws during lightweight UI interactions. Splitting swapchain graphics from native composited layers allows independent frame cadences and zero-latency window management.
+A single on-screen surface removes swapchain contention between independent
+layers (they no longer exist), keeps one frame cadence for the whole window,
+and makes live resize a pure top-left-crop of a fixed monitor-sized seam
+buffer (the canvas frame tracks via `autoresizingMask` + the Native Pixel
+Law drawableSize contract) — zero per-drag rebuilds, zero catch-up.
 
 #### The Rule:
-1. **Bottom Layer:** Swapchain or window blur only; no UI widgets render directly to the background swapchain.
-2. **Top Layer:** `CALayer` hierarchy hosted via Objective-C AppKit bridge with `geometryFlipped = YES`.
+1. **Bottom Layer:** window blur substrate + the Vulkan swapchain surface
+   (the seam canvas); no UI widgets render direct-to-chain, and nothing else
+   is ever parented below it.
+2. **Top Layer:** the one seam `CAMetalLayer` (`geometryFlipped = YES`,
+   TopLeft-pinned, `presentsWithTransaction = YES`); it is the only on-screen
+   Metal layer in the window. The opaque `bottomLayer`/`topLayer` window
+   slots are retained board handles — PARENTING ONLY, never dereferenced by
+   hotcwap, never on-screen CALayers after the pane-era retirement; render
+   repos composite boards into the seam instead.
 
 ---
 
@@ -85,10 +102,8 @@ forbidden.
   (offscreen images + acquire/render semaphores + fences) on its own
   timeline; the canvas samples the latest published frame at the anchor rect,
   in tree z-order interleaved with UI. One canvas total — no per-scene
-  surfaces.
-- `DIRECT` (managed exception, the Conflict Triage Law): a scene may own its
-  own `CAMetalLayer` + swapchain (`VkPane`) and present at its own pace —
-  full-window or latency-locked scenes that must not pay the composite copy.
+  surfaces and no DIRECT mode: the pane-era `CAMetalLayer` + `VkPane`
+  per-scene swapchain is retired (the Single-Seam Canvas Law).
 
 #### Composite rules:
 - The presenter wakes only on demand: a dirty tree, a published layer frame,
@@ -119,7 +134,7 @@ Live reloading without ABI validation causes memory misalignment and crashes whe
 
 ## 3. Repo-Local Extensions (managed, per the Conflict Triage Law)
 
-;;INTENTION("R1 Kernel Host: native AppKit/Metal bridge; two-layer split (swapchain bottom, CALayer IOSurface top); dynamic dylib hotloading.")
+;;INTENTION("R1 Kernel Host: native AppKit/Metal bridge; one seam canvas (single on-screen CAMetalLayer) hosting all Vulkan boards; dynamic dylib hotloading.")
 
 ---
 
