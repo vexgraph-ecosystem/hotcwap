@@ -38,6 +38,7 @@ add_library(hotcwap STATIC
     hot/hot_trampoline.c
     hot/hot_retire.c
     hot/manifest.c
+    hot/throwable.c
     window/window_event.c
 )
 target_include_directories(hotcwap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -285,5 +286,14 @@ if(NOT TARGET manifest_uninstall_test AND EXISTS "${HOTCWAP_TEST_DIR}/manifest_u
     target_include_directories(manifest_uninstall_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(manifest_uninstall_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(manifest_uninstall_test PRIVATE hotcwap)
+endif()
+
+if(NOT TARGET throwable_test AND EXISTS "${HOTCWAP_TEST_DIR}/throwable_test.c")
+    add_executable(throwable_test
+        ${HOTCWAP_TEST_DIR}/throwable_test.c
+    )
+    target_include_directories(throwable_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(throwable_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(throwable_test PRIVATE hotcwap)
 endif()
 
