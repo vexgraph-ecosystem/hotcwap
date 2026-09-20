@@ -3,7 +3,25 @@
 #include <dlfcn.h>
 #include <stddef.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: HotRetireRing
+ * ============================================================================
+ * Generational retirement ring for dynamically unloaded shared libraries (dylibs).
+ * Prevents segmentation faults from in-flight function execution by parking old
+ * module handles across a multi-generation grace period before invoking dlclose.
+ *
+ * Memory consists of a fixed-capacity ring of 16 retired handle slots paired with
+ * generation stamps. Handles are automatically evicted and closed once their age
+ * exceeds HOT_RETIRED_GENERATIONS or when the ring is explicitly drained at teardown.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -11,9 +29,10 @@
  * CLASS: HotRetireRing (hot/hot_retire.c)
  * LEVEL: L4 — Self-Management (per-instance grace-period close the loader stands on)
  * ============================================================================
- * One generational dlclose ring per HotModule instance. Old dylibs park
- * here for HOT_RETIRED_GENERATIONS polls so in-flight calls drain before
- * close. Full ring evicts the oldest entry; shutdown drains via drainAll.
+ * SUMMARY:
+ *   One generational dlclose ring per HotModule instance. Old dylibs park
+ *   here for HOT_RETIRED_GENERATIONS polls so in-flight calls drain before
+ *   close. Full ring evicts the oldest entry; shutdown drains via drainAll.
  *
  * STRUCT FIELDS (Mirroring hot/hot_retire.h — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -26,16 +45,41 @@
  *     void *handle;                          // retired dylib (NULL = free slot)
  *     uint32_t generation;                   // poll generation when retired
  *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Core Functions:
- *   - HotRetireRing_retire(self, handle)     : park handle, expire old entries
- *   - HotRetireRing_advance(self)            : next generation, close expired
- *   - HotRetireRing_drainAll(self)           : close + clear all (shutdown)
+ * Public Constructors: (.h)
+ *   - (none)
+ *
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
+ *   - HotRetireRing_retire(self, handle)     : Park handle, expire old entries
+ *   - HotRetireRing_advance(self)            : Next generation, close expired
+ *   - HotRetireRing_drainAll(self)           : Close and clear all (shutdown)
+ *
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - (none)
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
-// CORE FUNCTIONS
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 void HotRetireRing_retire(HotRetireRing *self, void *handle) {
     if (!self || !handle) return;
 

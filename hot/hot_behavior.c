@@ -4,7 +4,26 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: Hot_behavior
+ * ============================================================================
+ * Dynamically reloadable calculation module implementing animated pulse math,
+ * status bar dimensions, and asset paths. Operates strictly stateless on the GPU
+ * (no Vulkan or UI panel handles cross the module boundary) to ensure hot swaps
+ * can occur with zero dangling GPU command buffers or pointer corruption.
+ *
+ * Exposes versioned state save and restore hooks (schema v3 with ownership magic
+ * HOT_BEHAVIOR_SCHEMA_MAGIC) to preserve animation continuity across swaps,
+ * alongside backwards schema migration and automated rollback support.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -12,53 +31,66 @@
  * MODULE: Hot_behavior (hot/hot_behavior.c)
  * LEVEL: L3 — Module Code (reloaded dylib pulse/bar business logic)
  * ============================================================================
- * Phase-2 L2/L3 behavior subject: pure pulse/bar math + texture path.
+ * SUMMARY:
+ *   Phase-2 L2/L3 behavior subject: pure pulse/bar math + texture path.
  *
- * Deliberately stateless-on-GPU: this module NEVER calls Vk_* or touches
- * the Panel tree. Host handlers (main/test_suite.c, _tests/hotcwap/) own
- * cmdBuffer + Panel pointers and delegate only the math here. That keeps swap safe by
- * construction — no code pointers cross the dylib boundary, no dangling
- * renderHandler after dlclose.
+ *   Deliberately stateless-on-GPU: this module NEVER calls Vk_* or touches
+ *   the Panel tree. Host handlers (main/test_suite.c, _tests/hotcwap/) own
+ *   cmdBuffer + Panel pointers and delegate only the math here. That keeps swap safe by
+ *   construction — no code pointers cross the dylib boundary, no dangling
+ *   renderHandler after dlclose.
  *
-* State schema (versioned for L3 migration + #8.5 rollback validation):
- *   v1 (1.0.0): [phaseBias f32][modeShadow i32] = 8 bytes
- *   v2 (1.1.0): [phaseBias f32][modeShadow i32][glowStrength f32] = 12 bytes
- *   v3 (1.2.0): [schemaMagic u32][phaseBias f32][modeShadow i32][glowStrength f32] = 16 bytes
- * Hot_save emits v3 blobs carrying HOT_BEHAVIOR_SCHEMA_MAGIC as an ownership
- * tag. Hot_restore adopts a v3 blob only when its magic matches the current
- * build (a foreign magic returns false), wraps legacy v1/v2 sizes into the
- * current schema, and rejects unknown lengths. The loader (hot/hot.c) treats
- * a restore rejection as #8.5 Automated State Rollback: it keeps the previous
- * generation live and never advances the stamp. Rebuild the module with
- * -DHOT_BEHAVIOR_SCHEMA_MAGIC=<other> to produce a "foreign-generation" build
- * — the bad payload manifest_rollback_test promotes as generation 2.
- * Hot_migrate carries v1/v2 -> v3 forward (glow defaults to 1.0); the loader
- * calls it when the saved blob predates the new module, same-version swaps
- * take the direct Hot_save/Hot_restore path.
+ *   State schema (versioned for L3 migration + rollback validation):
+ *     v1 (1.0.0): [phaseBias f32][modeShadow i32] = 8 bytes
+ *     v2 (1.1.0): [phaseBias f32][modeShadow i32][glowStrength f32] = 12 bytes
+ *     v3 (1.2.0): [schemaMagic u32][phaseBias f32][modeShadow i32][glowStrength f32] = 16 bytes
+ *   Hot_save emits v3 blobs carrying HOT_BEHAVIOR_SCHEMA_MAGIC as an ownership
+ *   tag. Hot_restore adopts a v3 blob only when its magic matches the current
+ *   build (a foreign magic returns false), wraps legacy v1/v2 sizes into the
+ *   current schema, and rejects unknown lengths. The loader (hot/hot.c) treats
+ *   a restore rejection as Automated State Rollback: it keeps the previous
+ *   generation live and never advances the stamp.
+ *   Hot_migrate carries v1/v2 to v3 forward (glow defaults to 1.0).
  *
  * STRUCT FIELDS: none — procedural/stateless (operates on HotModule via Hot_* module exports)
  *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
- *   - Hot_init_module(void)
+ * Public Constructors: (.h)
+ *   - Hot_init_module(void)                   : Module initialization export
  *
- * Core Functions:
- *   - Hot_shutdown_module(void)
- *   - Hot_save(buf, cap, outLen)
- *   - Hot_restore(buf, len)
- *   - Hot_migrate(oldVersion, oldBuf, oldLen, newBuf, newCap, outLen)
- *   - Hot_manifest(void)
- *   - VkModuleGetTrampolines(outCount)   : loader-ABI trampoline table export
- *   - hot_behavior_pulse(nowSeconds)
- *   - hot_behavior_bar(w, h, pulse, outBarH, outBarW)
- *   - hot_texture_path(void)
+ * Private Constructors: (.c static)
+ *   - (none)
  *
- * Setters:
- *   - hot_behavior_set_phase_bias(value)
+ * Public Core Functions: (.h)
+ *   - Hot_shutdown_module(void)               : Module teardown export
+ *   - Hot_save(buf, cap, outLen)              : Serialize module state blob
+ *   - Hot_restore(buf, len)                   : Rehydrate module state blob
+ *   - Hot_migrate(oldVer, oldB, l, newB, c, outL) : Forward schema migration
+ *   - Hot_manifest(void)                      : JSON descriptor string export
+ *   - VkModuleGetTrampolines(outCount)        : Exported trampoline table
+ *   - hot_behavior_pulse(nowSeconds)          : Trigonometric pulse math
+ *   - hot_behavior_bar(w, h, pulse, outH, outW) : Layout bar dimension math
+ *   - hot_texture_path(void)                  : Relative texture asset path
  *
- * Getters:
- *   - hot_behavior_get_phase_bias(void)
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - hot_behavior_set_phase_bias(value)      : Set phase bias offset
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - hot_behavior_get_phase_bias(void)       : Query phase bias offset
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -75,9 +107,13 @@ static float s_phaseBias = 0.0f;
 static int32_t s_modeShadow = 0;
 static float s_glowStrength = 1.0f;
 
+// CONSTRUCTORS (PUBLIC & PRIVATE)
+
 bool Hot_init_module(void) {
     return true;
 }
+
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 
 void Hot_shutdown_module(void) {
     return;
@@ -224,10 +260,16 @@ const char *hot_texture_path(void) {
     return "assets/sunflower.png";
 }
 
+// SETTERS (PUBLIC & PRIVATE)
+
+;;SETTER
 void hot_behavior_set_phase_bias(float value) {
     s_phaseBias = value;
 }
 
+// GETTERS (PUBLIC & PRIVATE)
+
+;;GETTER
 float hot_behavior_get_phase_bias(void) {
     return s_phaseBias;
 }

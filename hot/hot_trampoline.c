@@ -2,7 +2,25 @@
 
 #include <string.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: HotTrampolineTable
+ * ============================================================================
+ * Atomic indirect call-dispatch table for hot-swappable module exports. Provides
+ * transparent trampoline redirection so callers invoke stable function addresses
+ * while the underlying implementation dylib addresses swap dynamically in memory.
+ *
+ * Holds an array of up to 1024 symbol rows, each tracking an atomic current pointer
+ * and a fallback pointer from the prior generation. During active module swaps, the
+ * fallback pointer guarantees callers landing mid-swap never encounter a NULL pointer.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -10,10 +28,11 @@
  * CLASS: HotTrampolineTable (hot/hot_trampoline.c)
  * LEVEL: L4 — Self-Management (per-instance swap machinery the loader stands on)
  * ============================================================================
- * One atomic function-pointer table per HotModule instance. Two loaders
- * share this code but resolve through their own tables — same symbol,
- * different targets, zero collision. Reload swaps a row's ptr while
- * fallback_ptr covers mid-swap readers.
+ * SUMMARY:
+ *   One atomic function-pointer table per HotModule instance. Two loaders
+ *   share this code but resolve through their own tables — same symbol,
+ *   different targets, zero collision. Reload swaps a row's ptr while
+ *   fallback_ptr covers mid-swap readers.
  *
  * STRUCT FIELDS (Mirroring hot/hot_trampoline.h — exactly this file's class):
  * ----------------------------------------------------------------------------
@@ -27,19 +46,41 @@
  *     _Atomic(void*) fallback_ptr;           // prior generation (mid-swap cover)
  *     char name[HOT_MANIFEST_MAX_NAME];      // export symbol name
  *
+ * PRIVATE HELPERS:
+ * ----------------------------------------------------------------------------
+ *   (none)
+ *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Core Functions:
- *   - HotTrampolineTable_register(self, name) : allocate a row, returns index
- *   - HotTrampolineTable_set(self, idx, ptr)  : atomic swap, stash old as fallback
- *   - HotTrampolineTable_find(self, name)     : index by symbol name, -1 if absent
+ * Public Constructors: (.h)
+ *   - (none)
  *
- * Getters:
- *   - HotTrampolineTable_get(self, idx)       : current ptr with fallback cover
+ * Private Constructors: (.c static)
+ *   - (none)
+ *
+ * Public Core Functions: (.h)
+ *   - HotTrampolineTable_register(self, name) : Allocate a row, returns index
+ *   - HotTrampolineTable_set(self, idx, ptr)  : Atomic swap, stash old as fallback
+ *   - HotTrampolineTable_find(self, name)     : Index by symbol name, -1 if absent
+ *
+ * Private Core Functions: (.c static)
+ *   - (none)
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - HotTrampolineTable_get(self, idx)       : Current ptr with fallback cover
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
-// CORE FUNCTIONS
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 // Register a row for a function. Returns the row index.
 int HotTrampolineTable_register(HotTrampolineTable *self, const char *name) {
     if (!self || !name) return -1;
@@ -78,7 +119,8 @@ int HotTrampolineTable_find(HotTrampolineTable *self, const char *name) {
     return -1;
 }
 
-// GETTERS
+// GETTERS (PUBLIC & PRIVATE)
+;;GETTER
 // Get a row's current function pointer, falling back to prior generation on mid-swap NULL.
 void *HotTrampolineTable_get(HotTrampolineTable *self, int idx) {
     if (!self) return NULL;
