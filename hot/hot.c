@@ -12,8 +12,28 @@
 #include <pthread.h>
 #include <time.h>
 
+#include "annotation/definition.h"
 #include "annotation/overview.h"
+#include "annotation/getter.h"
+#include "annotation/setter.h"
 #include "annotation/intention.h"
+
+;;DEFINITION
+/**
+ * ============================================================================
+ * DEFINITION: HotModule
+ * ============================================================================
+ * Manifest-driven dynamic module hot-reloading manager. Binds to an on-disk
+ * manifest library key (bin/current/<library>), detects generation advances
+ * via the monotonic generation stamp, and manages non-blocking module swaps.
+ *
+ * Coordinates off-thread state capture (Hot_save) on a dedicated worker thread,
+ * fail-closed symbol validation and dylib loading across library sections, atomic
+ * trampoline swapping, and automated rollback if state restoration (Hot_restore)
+ * fails. Old dylibs are retired into the per-instance HotRetireRing to allow
+ * in-flight invocations to drain safely without crashes.
+ * ============================================================================
+ */
 
 ;;OVERVIEW
 /**
@@ -21,21 +41,22 @@
  * CLASS: HotModule (hot/hot.c)
  * LEVEL: L4 — Self-Management (watches the manifest ladder, verifies, swaps, retires)
  * ============================================================================
- * The manifest-driven hotloader. A HotModule binds ONE library key of the
- * mounted manifest (bin/current/<library>). Hot_poll compares
- * MANIFEST_GENERATION(<library>) against its last-seen generation: on a move
- * it snapshots the CURRENT generation's module state on an off-thread save
- * worker (hot loops never pay the serialization), then on a later pass it
- * dlopens every section of the new current set, verifies the WHOLE library
- * fail-closed (dlopen + VkModuleGetTrampolines on every section before any
- * commit), rehydrates the saved blobs into the STAGED images BEFORE any
- * commit, then atomically swaps the trampoline table and retires the old
- * handles into the grace ring. A section whose Hot_restore rejects its blob
- * rolls the whole swap back (#8.5 Automated State Rollback): the old
- * generation stays live, the generation never advances, and the next poll
- * re-attempts once the payload is fixed.
- * The rename slide (MANIFEST_PROMOTE) IS the swap — there is no clone step
- * and no watch dir. Hot_poll() runs on main thread only.
+ * SUMMARY:
+ *   The manifest-driven hotloader. A HotModule binds ONE library key of the
+ *   mounted manifest (bin/current/<library>). Hot_poll compares
+ *   MANIFEST_GENERATION(<library>) against its last-seen generation: on a move
+ *   it snapshots the CURRENT generation's module state on an off-thread save
+ *   worker (hot loops never pay the serialization), then on a later pass it
+ *   dlopens every section of the new current set, verifies the WHOLE library
+ *   fail-closed (dlopen + VkModuleGetTrampolines on every section before any
+ *   commit), rehydrates the saved blobs into the STAGED images BEFORE any
+ *   commit, then atomically swaps the trampoline table and retires the old
+ *   handles into the grace ring. A section whose Hot_restore rejects its blob
+ *   rolls the whole swap back (Automated State Rollback): the old
+ *   generation stays live, the generation never advances, and the next poll
+ *   re-attempts once the payload is fixed.
+ *   The rename slide (MANIFEST_PROMOTE) IS the swap — there is no clone step
+ *   and no watch dir. Hot_poll() runs on main thread only.
  *
  * STRUCT FIELDS (defined here; hot/hot.h keeps the type opaque):
  * ----------------------------------------------------------------------------
@@ -77,30 +98,46 @@
  *     const void *trampolines;  // VkModuleGetTrampolines table
  *     uint32_t trampolineCount; // entries
  *
- *   Static wiring (no stored state): find_module, snapshot_begin,
- *   snapshot_modules (worker body), save_worker_main, perform_swap.
- *
- * Segregated (own files, see their overviews):
- *   HotTrampoline → hot/hot_trampoline.h/c
- *   HotRetiredHandle → hot/hot_retire.h/c
+ *   Segregated (own files, see their overviews):
+ *     HotTrampoline in hot/hot_trampoline.h and hot/hot_trampoline.c
+ *     HotRetiredHandle in hot/hot_retire.h and hot/hot_retire.c
  *
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
- * Constructors:
- *   - Hot_init(library)
+ * Public Constructors: (.h)
+ *   - Hot_init(library)                      : Allocate and bind to library key
  *
- * Core Functions:
- *   - HotShutdown(hot)
- *   - Hot_poll(hot, loaded_count)
- *   - Hot_shutdown_module(hot, module_name)
- *   - Hot_save_module(hot, module_name, buf, cap, outLen)
- *   - Hot_restore_module(hot, module_name, buf, len)
- *   - Hot_migrate_module(hot, module_name, oldVersion, oldBuf, oldLen, newBuf, newCap, outLen)
+ * Private Constructors: (.c static)
+ *   - (none)
  *
- * Getters:
- *   - Hot_get_symbol(hot, name)
- *   - Hot_get_generation(hot)
- *   - Hot_last_error(hot)
+ * Public Core Functions: (.h)
+ *   - HotShutdown(hot)                       : Join save worker and drain modules
+ *   - Hot_poll(hot, loaded_count)            : Two-phase generational reload poll
+ *   - Hot_shutdown_module(hot, name)         : Invoke module teardown export
+ *   - Hot_save_module(hot, name, b, c, len)  : Capture module state blob
+ *   - Hot_restore_module(hot, name, buf, l)  : Rehydrate state into new image
+ *   - Hot_migrate_module(hot, name, ...)     : Schema migration across versions
+ *
+ * Private Core Functions: (.c static)
+ *   - find_module(hot, name)                 : Lookup internal module slot
+ *   - snapshot_begin(hot)                    : Wake save worker for off-thread capture
+ *   - snapshot_modules(hot)                  : Worker body capturing state blobs
+ *   - save_worker_main(arg)                  : Dedicated save worker thread entry
+ *   - perform_swap(hot)                      : Stage, verify, restore, and swap dylibs
+ *
+ * Public Setters: (.h)
+ *   - (none)
+ *
+ * Private Setters: (.c static)
+ *   - (none)
+ *
+ * Public Getters: (.h)
+ *   - Hot_get_symbol(hot, name)              : Lookup function pointer in trampolines
+ *   - Hot_get_generation(hot)                : Last committed generation counter
+ *   - Hot_last_error(hot)                    : Last diagnostic error message
+ *
+ * Private Getters: (.c static)
+ *   - (none)
  * ============================================================================
  */
 
@@ -202,6 +239,7 @@ static HotModuleInternal *find_module(HotModule *hot, const char *name) {
 // Off-thread state-save worker (HOT_SAVE_WAIT_NS cond-wait cycle, cancel-aware).
 static void *save_worker_main(void *arg);
 
+// CONSTRUCTORS (PUBLIC & PRIVATE)
 HotModule *Hot_init(const char *library) {
     if (!library || *library == '\0')
         return NULL;
@@ -230,7 +268,7 @@ HotModule *Hot_init(const char *library) {
     return hot;
 }
 
-// CORE FUNCTIONS
+// CORE FUNCTIONS (PUBLIC & PRIVATE)
 
 // Stop the save worker FIRST (bounded join — its cond wait is capped at
 // HOT_SAVE_WAIT_NS), so no thread touches module handles after shutdown
@@ -600,28 +638,6 @@ HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
     return perform_swap(hot, libDir, loaded_count); // nothing save-capable
 }
 
-HotFn Hot_get_symbol(HotModule *hot, const char *name) {
-    if (!hot || !name)
-        return NULL;
-
-    HotTrampolineTable *table = &(*hot).trampolines;
-    int tidx = HotTrampolineTable_find(table, name);
-    if (tidx < 0)
-        return NULL;
-
-    return (HotFn) HotTrampolineTable_get(table, tidx);
-}
-
-uint64_t Hot_get_generation(const HotModule *hot) {
-    return hot ? (*hot).generation : 0;
-}
-
-const char *Hot_last_error(HotModule *hot) {
-    if (!hot)
-        return "NULL hot module";
-    return (*hot).last_error;
-}
-
 void Hot_shutdown_module(HotModule *hot, const char *module_name) {
     if (!hot || !module_name)
         return;
@@ -672,4 +688,30 @@ bool Hot_migrate_module(HotModule *hot, const char *module_name, const char *old
     if (!migrate)
         return false;
     return migrate(oldVersion, oldBuf, oldLen, newBuf, newCap, outLen);
+}
+
+// GETTERS (PUBLIC & PRIVATE)
+;;GETTER
+HotFn Hot_get_symbol(HotModule *hot, const char *name) {
+    if (!hot || !name)
+        return NULL;
+
+    HotTrampolineTable *table = &(*hot).trampolines;
+    int tidx = HotTrampolineTable_find(table, name);
+    if (tidx < 0)
+        return NULL;
+
+    return (HotFn) HotTrampolineTable_get(table, tidx);
+}
+
+;;GETTER
+uint64_t Hot_get_generation(const HotModule *hot) {
+    return hot ? (*hot).generation : 0;
+}
+
+;;GETTER
+const char *Hot_last_error(HotModule *hot) {
+    if (!hot)
+        return "NULL hot module";
+    return (*hot).last_error;
 }
