@@ -93,8 +93,6 @@
  *   _Atomic int presentMode;      // present pacing (FIFO/IMMEDIATE), pure state
  *   _Atomic bool transparent;     // composite transparency request, pure state
  *   _Atomic uint64_t renderGeneration; // policy-reflection counter (rebuild ticket)
- *   _Atomic(void*) topLayer;      // content board handle (owned by the render repo)
- *   _Atomic(void*) bottomLayer;   // scene board handle (owned by the render repo)
  *   _Atomic bool enabled;         // false mutes ALL OS input for this window
  *   bool lastFocused;             // focus-flip detection during the pump
  *   _Atomic uint32_t monitorId;   // CGDirectDisplayID mirror (0 = unmapped)
@@ -338,11 +336,6 @@ struct Window {
     _Atomic int presentMode;
     _Atomic bool transparent;
     _Atomic uint64_t renderGeneration;
-
-    // Board slots — opaque layer handles consumed by graphvex/darling; this
-    // window stores them, never dereferences them. Panels live on the Frame.
-    _Atomic(void*) topLayer;
-    _Atomic(void*) bottomLayer;
 
     _Atomic bool enabled;
     _Atomic bool keyEnabled; // false = canBecomeKeyWindow refuses (held by a modal dialog)
@@ -1109,8 +1102,6 @@ static Window *windowAlloc(const WindowDesc *desc) {
         atomic_store_explicit(&(*w).presentMode, WINDOW_PRESENT_FIFO, memory_order_relaxed);
         atomic_store_explicit(&(*w).transparent, false, memory_order_relaxed);
         atomic_store_explicit(&(*w).renderGeneration, 0, memory_order_relaxed);
-        atomic_store_explicit(&(*w).topLayer, nullptr, memory_order_relaxed);
-        atomic_store_explicit(&(*w).bottomLayer, nullptr, memory_order_relaxed);
         atomic_store_explicit(&(*w).enabled, true, memory_order_relaxed);
         atomic_store_explicit(&(*w).keyEnabled, true, memory_order_relaxed);
         (*w).lastFocused = false;
@@ -1262,75 +1253,29 @@ uint64_t Window_renderGeneration(const Window *window) {
 
 // --- Graphics board slots (stored + ordered; rendering lives elsewhere) -----
 
-// Retained board slot stacking (PARENTING ONLY — content is owned by the
-// render repo; boards composite into the single seam canvas, never parented
-// as on-screen layers in the pane-era sense):
-// Visual stack: NSWindow -> NSVisualEffectView (blur) -> bottomLayer (scene-board handle) -> topLayer (content-board handle).
-// CoreAnimation transaction brackets with actions disabled guarantee zero tearing and zero gap during live resize.
+// ;;INTENTION("Graphics board slots and layer ordering are GPU-era stubs retired per the Window Decoupling Law. A Window is a dumb presentation surface; graphics layers and surfaces are managed by graphvex.")
 void Window_orderLayers(Window *window) {
-    if (window == nullptr || (*window).nsWindow == nil)
-        return;
-
-    @autoreleasepool {
-        NSView *contentView = [(*window).nsWindow contentView];
-        if (contentView == nil)
-            return;
-
-        CALayer *rootLayer = [contentView layer];
-        if (rootLayer == nil)
-            return;
-
-        void *bPtr = atomic_load_explicit(&(*window).bottomLayer, memory_order_acquire);
-        void *tPtr = atomic_load_explicit(&(*window).topLayer, memory_order_acquire);
-        CALayer *bottom = bPtr ? (__bridge CALayer*) bPtr : nil;
-        CALayer *top = tPtr ? (__bridge CALayer*) tPtr : nil;
-
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-
-        // Bottom layer (scene board): parents below topLayer
-        if (bottom != nil) {
-            if ([bottom superlayer] != rootLayer)
-                [rootLayer addSublayer:bottom];
-            [bottom setFrame:[contentView bounds]];
-        }
-
-        // Top layer (content board): parents at top of visual hierarchy
-        if (top != nil) {
-            if ([top superlayer] != rootLayer)
-                [rootLayer addSublayer:top];
-            [top setFrame:[contentView bounds]];
-        }
-
-        // Order: ensure bottom is below top if both present
-        if (bottom != nil && top != nil && [bottom superlayer] == rootLayer && [top superlayer] == rootLayer) {
-            [rootLayer insertSublayer:bottom below:top];
-        }
-
-        [CATransaction commit];
-    }
+    (void) window;
 }
 
 void Window_setBottomLayer(Window *window, void *layer) {
-    if (window == nullptr)
-        return;
-    atomic_store_explicit(&(*window).bottomLayer, layer, memory_order_release);
-    Window_orderLayers(window);
+    (void) window;
+    (void) layer;
 }
 
 void *Window_getBottomLayer(const Window *window) {
-    return window ? atomic_load_explicit(&(*window).bottomLayer, memory_order_acquire) : nullptr;
+    (void) window;
+    return nullptr;
 }
 
 void Window_setTopLayer(Window *window, void *layer) {
-    if (window == nullptr)
-        return;
-    atomic_store_explicit(&(*window).topLayer, layer, memory_order_release);
-    Window_orderLayers(window);
+    (void) window;
+    (void) layer;
 }
 
 void *Window_getTopLayer(const Window *window) {
-    return window ? atomic_load_explicit(&(*window).topLayer, memory_order_acquire) : nullptr;
+    (void) window;
+    return nullptr;
 }
 
 // ;;INTENTION("Pane/board compositing was the GPU-era shim's job; on this window it is inert (still-unmigrated darling compositor retains the call). Pane work migrates to the render repos' own pass; retires together with the composite seam.")
@@ -1392,9 +1337,7 @@ static bool hasStyleBit(Window *window, NSWindowStyleMask bit) {
     return (styleMaskOf(window) & bit) != 0;
 }
 
-// Blur is banned on DECORATED chrome: the opaque titlebar + frosted glass
-// reads as a rendering bug. Detect it as titled-with-full-size-content-view
-// (NAKED) or zero-style (BORDERLESS) being the allowed blur carriers.
+// Decorated chrome: standard titled window without fullSizeContentView.
 static bool windowChromeIsDecorated(Window *window) {
     if (window == nullptr)
         return false;
@@ -1663,18 +1606,6 @@ void Window_setUndecorated(Window *window, int mode) {
         [(*window).nsWindow setTitlebarAppearsTransparent:transparent];
         [(*window).nsWindow setTitleVisibility:(transparent ? NSWindowTitleHidden : NSWindowTitleVisible)];
 
-        // Chrome can never outrun the blur ban: switching to DECORATED strips
-        // any active blur so a frosted titlebar never renders.
-        if (mode != WINDOW_UNDECORATED_NAKED && mode != WINDOW_UNDECORATED_BORDERLESS) {
-            for (NSView *v in [[(*window).nsWindow contentView] subviews]) {
-                if ([v isKindOfClass:[NSVisualEffectView class]]) {
-                    [(NSVisualEffectView*) v removeFromSuperview];
-                    Window_setTransparent(window, false);
-                    break;
-                }
-            }
-        }
-
         // Mask (and therefore the native light layout) changed: re-snapshot and
         // re-apply per-button visibility + offset against the new layout.
         (*window).lightBaseSet = false;
@@ -1823,46 +1754,10 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
     }
 }
 
+// ;;INTENTION("Blur and visual effects are managed by graphvex VisualEffect, not the window. Retained as inert stub per the Window Decoupling Law.")
 void Window_setBlur(Window *window, float blur) {
-    if (window == nullptr)
-        return;
-    @autoreleasepool {
-        if (blur > 0.01f && windowChromeIsDecorated(window)) {
-            NSLog(@"window: blur rejected — decorated chrome cannot be blurred (set WINDOW_UNDECORATED_NAKED/BORDERLESS first)");
-            return;
-        }
-
-        NSWindow *nsw = (*window).nsWindow;
-        NSView *contentView = [nsw contentView];
-
-        NSVisualEffectView *blurView = nil;
-        for (NSView *v in [contentView subviews]) {
-            if ([v isKindOfClass:[NSVisualEffectView class]]) {
-                blurView = (NSVisualEffectView*) v;
-                break;
-            }
-        }
-
-        if (blur > 0.01f) {
-            if (blurView == nil) {
-                blurView = [[NSVisualEffectView alloc] initWithFrame:[contentView bounds]];
-                [blurView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-                [blurView setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
-                [blurView setMaterial:NSVisualEffectMaterialHUDWindow];
-                [blurView setState:NSVisualEffectStateActive];
-                [contentView addSubview:blurView positioned:NSWindowBelow relativeTo:nil];
-            }
-            [blurView setAlphaValue:(CGFloat) blur];
-            [nsw setBackgroundColor:[NSColor clearColor]];
-            [nsw setOpaque:NO];
-            if (contentView.layer)
-                contentView.layer.opaque = NO;
-            Window_setTransparent(window, true);
-        } else if (blurView) {
-            [blurView removeFromSuperview];
-            Window_setTransparent(window, false);
-        }
-    }
+    (void) window;
+    (void) blur;
 }
 
 void Window_setAlwaysOnTop(Window *window, bool onTop) {
@@ -1906,27 +1801,13 @@ void Window_bringToFront(Window *window) {
 }
 
 void Window_attachChild(Window *parent, Window *child) {
-    if (parent == nullptr || child == nullptr)
-        return;
-    @autoreleasepool {
-        NSWindow *p = (*parent).nsWindow;
-        NSWindow *c = (*child).nsWindow;
-        if (p == nil || c == nil || p == c)
-            return;
-        [p addChildWindow:c ordered:NSWindowAbove];
-    }
+    (void) parent;
+    (void) child;
 }
 
 void Window_detachChild(Window *parent, Window *child) {
-    if (parent == nullptr || child == nullptr)
-        return;
-    @autoreleasepool {
-        NSWindow *p = (*parent).nsWindow;
-        NSWindow *c = (*child).nsWindow;
-        if (p == nil || c == nil)
-            return;
-        [p removeChildWindow:c];
-    }
+    (void) parent;
+    (void) child;
 }
 
 // --- Minimize ---
