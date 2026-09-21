@@ -268,11 +268,6 @@ void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *out
 
 void Window_setOpacity(Window *window, float opacity); // 0.0 to 1.0
 void Window_setTransparentBackground(Window *window, bool transparent); // Makes the window backdrop fully clear so Vulkan can draw holes
-// 0.0 to 1.0 (adds frosted glass behind content). Rejected with a console
-// warning while chrome is DECORATED — blur requires NAKED or BORDERLESS chrome
-// (frosted glass under an opaque titlebar is a defect). Switching chrome back
-// to DECORATED strips any active blur.
-void Window_setBlur(Window *window, float blur);
 void Window_setAlwaysOnTop(Window *window, bool onTop);
 void Window_setClickThrough(Window *window, bool clickThrough);
 void Window_setShadow(Window *window, bool shadow);

@@ -229,7 +229,6 @@
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y) : macOS-only stub
  *   - Window_setOpacity(window, opacity)    : stored (;;INTENTION)
  *   - Window_setTransparentBackground(window, transparent)
- *   - Window_setBlur(window, blur)          : stored (;;INTENTION — no base proto)
  *   - Window_setAlwaysOnTop(window, onTop)  : stored (;;INTENTION)
  *   - Window_setClickThrough(window, clickThrough) : empty input region
  *   - Window_setShadow(window, shadow)      : stored (;;INTENTION)
@@ -1790,13 +1789,6 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
     if (window == nullptr)
         return;
     atomic_store_explicit(&(*window).transparent, transparent, memory_order_relaxed);
-}
-
-// Blur: no Wayland base protocol exposes a client-side frosted-glass material.
-// Stored so the surface stays stable; a wlr-layer-shell/ext wall years later.
-void Window_setBlur(Window *window, float blur) {
-    (void) window;
-    (void) blur;
 }
 
 void Window_setAlwaysOnTop(Window *window, bool onTop) {

@@ -130,7 +130,6 @@
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
- *   - Window_setBlur(window, blur)
  *   - Window_setAlwaysOnTop(window, onTop)
  *   - Window_setClickThrough(window, clickThrough)
  *   - Window_setShadow(window, shadow)

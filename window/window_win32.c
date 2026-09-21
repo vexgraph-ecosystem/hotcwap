@@ -228,7 +228,6 @@
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)          : macOS-only stub
  *   - Window_setOpacity(window, opacity)          : SetLayeredWindowAttributes LWA_ALPHA
  *   - Window_setTransparentBackground(window, transparent) : WS_EX_LAYERED + clear-color note
- *   - Window_setBlur(window, blur)                : DwmEnableBlurBehindWindow (DECORATED ban)
  *   - Window_setAlwaysOnTop(window, onTop)        : HWND_TOPMOST / HWND_NOTOPMOST
  *   - Window_setClickThrough(window, clickThrough) : WS_EX_TRANSPARENT
  *   - Window_setShadow(window, shadow)            : DWM non-client-rendering policy
@@ -1501,8 +1500,6 @@ void Window_setUndecorated(Window *window, int mode) {
     bool decorated = (mode == WINDOW_DECORATED);
     (*window).decorated = mode;
     windowApplyChrome(window, decorated);
-    if (decorated)
-        Window_setBlur(window, 0.0f);
 }
 
 void Window_setDecorated(Window *window, bool decorated) {
@@ -1603,32 +1600,6 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
     // A clear backdrop is the Win32 dialect of the Cocoa clear background:
     // the layered window renders per-pixel, and a render path paints holes.
     Window_setTransparent(window, transparent);
-}
-
-void Window_setBlur(Window *window, float blur) {
-    if (window == nullptr)
-        return;
-    // The blur ban mirrors the Cocoa gate: DECORATED chrome cannot be blurred.
-    if (blur > 0.01f && (*window).decorated == true) {
-        fprintf(stderr, "window: blur rejected — decorated chrome cannot be blurred "
-                        "(set WINDOW_UNDECORATED_NAKED/BORDERLESS first)\n");
-        return;
-    }
-    if (blur > 0.01f) {
-        DWM_BLURBEHIND bb;
-        memset(&bb, 0, sizeof(bb));
-        (*bb).dwFlags = DWM_BB_ENABLE;
-        (*bb).fEnable = TRUE;
-        DwmEnableBlurBehindWindow((*window).hwnd, &bb);
-        Window_setTransparent(window, true);
-    } else {
-        DWM_BLURBEHIND bb;
-        memset(&bb, 0, sizeof(bb));
-        (*bb).dwFlags = DWM_BB_ENABLE;
-        (*bb).fEnable = FALSE;
-        DwmEnableBlurBehindWindow((*window).hwnd, &bb);
-        Window_setTransparent(window, false);
-    }
 }
 
 void Window_setAlwaysOnTop(Window *window, bool onTop) {

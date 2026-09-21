@@ -204,7 +204,6 @@
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
- *   - Window_setBlur(window, blur)
  *   - Window_setAlwaysOnTop(window, onTop)
  *   - Window_setClickThrough(window, clickThrough)
  *   - Window_setShadow(window, shadow)
@@ -1752,12 +1751,6 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
             [(*window).nsWindow contentView].layer.opaque = !transparent;
         Window_setTransparent(window, transparent);
     }
-}
-
-// ;;INTENTION("Blur and visual effects are managed by graphvex VisualEffect, not the window. Retained as inert stub per the Window Decoupling Law.")
-void Window_setBlur(Window *window, float blur) {
-    (void) window;
-    (void) blur;
 }
 
 void Window_setAlwaysOnTop(Window *window, bool onTop) {
