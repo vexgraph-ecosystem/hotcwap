@@ -713,13 +713,11 @@ bool Kernel_runConsole(Kernel *self, Console *c) {
     return c ? Console_run(c) : false;
 }
 
-// External demand-driven graphics loop seam (graphvex GfxLoop_runApplication).
-// Declared weak so hotcwap compiles and links independently in headless / standalone targets.
-#if defined(__APPLE__) || defined(__linux__)
-extern int GfxLoop_runApplication(void *context, bool (*continueFn)(void *), void (*pollFn)(void)) __attribute__((weak));
-#else
-extern int GfxLoop_runApplication(void *context, bool (*continueFn)(void *), void (*pollFn)(void));
-#endif
+// The GfxLoop runner seat (the Vertical Integration Law: R1 owns fn-tables,
+// never links R3 and never names graphvex). Kernel_setGfxAppRunner installs
+// the demand-driven Application loop at boot; a null seat falls back to the
+// parked Application_run loop, so hotcwap compiles and links standalone with
+// zero graphvex symbols (no weak externs, no Mach-O undefined-symbol traps).
 
 // R1's half of the GfxLoop lifecycle contract (the Vertical Integration Law:
 // the Kernel never names Vk_* and graphvex never mirrors a Kernel/Application
@@ -753,15 +751,12 @@ int Kernel_runApplication(Kernel *self, Application *a) {
     kernelStartApplication(self, a);
     bridgeBespoke();
 
-    // If graphvex's GfxLoop is linked, hand the application to the demand-driven
-    // frame scheduler loop: completion + hot servicing stay HERE (R1), the
-    // frame loop + Thread-0 event pump stay THERE (R3). Otherwise, fall back
-    // to hotcwap's parked loop. bridgeBespoke only arms the fallback branch —
-    // when the GfxLoop owns the run, its first step IS runGraphics(); calling
-    // bridgeBespoke here too runs one stray GraphicsLoop_step before the loop
-    // even sets running (a duplicated infancy present).
-    if (GfxLoop_runApplication != nullptr) {
-        return GfxLoop_runApplication(a, kernelGfxAppContinues, kernelGfxPump);
+    // If a GfxLoop runner is installed in the seat, hand the application to
+    // the demand-driven frame scheduler loop: completion + hot servicing stay
+    // HERE (R1), the frame loop + Thread-0 event pump stay THERE (R3).
+    // Otherwise, fall back to hotcwap's parked loop.
+    if ((*self).gfxAppRun != nullptr) {
+        return (*self).gfxAppRun(a, kernelGfxAppContinues, kernelGfxPump);
     }
 
     bridgeBespoke();
@@ -950,6 +945,20 @@ uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t 
     for (uint32_t i = 0; i < n; i++)
         out[i] = (*self).applications[i];
     return n;
+}
+
+;;SETTER
+void Kernel_setGfxAppRunner(Kernel *self, int (*fn)(void *context, bool (*continueFn)(void *), void (*pollFn)(void))) {
+    if (!self)
+        return;
+    (*self).gfxAppRun = fn;
+}
+
+;;GETTER
+int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continueFn)(void *), void (*pollFn)(void)) {
+    if (!self)
+        return nullptr;
+    return (*self).gfxAppRun;
 }
 
 ;;GETTER
