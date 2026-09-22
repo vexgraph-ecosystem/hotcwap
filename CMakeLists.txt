@@ -134,8 +134,9 @@ endif()
 if(APPLE)
     target_sources(hotcwap PRIVATE
             window/window_cocoa.m
+            window/traffic_light_cocoa.m
     )
-    set_source_files_properties(window/window_cocoa.m PROPERTIES
+    set_source_files_properties(window/window_cocoa.m window/traffic_light_cocoa.m PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(hotcwap PUBLIC
         "-framework Cocoa"

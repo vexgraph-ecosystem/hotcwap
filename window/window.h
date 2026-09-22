@@ -356,14 +356,17 @@ bool Window_present(Window *window, const Buffer *frame);
 // (broadcast-tagged synthetic events reach every window). Removal is by
 // pointer identity. Destroying the window detaches its listeners.
 //
-// The OS lifecycle contract (resize/fullscreen/minimize/restore/press/focus/
-// quit/zoom/occlusion) is the WindowEvent class in window/window_event.h — ONE embedded
+// The OS lifecycle contract (resize/move/fullscreen/minimize/restore/press/
+// focus/quit/zoom/occlusion) is the WindowEvent class in window/window_event.h — ONE embedded
 // per window, fired by the pump pass on Thread 0. It supersedes the former
 // WindowEvent adapter list and Window_addWindowAdapter (retired; the old
 // adapter struct was macOS-only and lived in the retired Cocoa shim).
+// onResized(w,h) and onMoved(x,y) fire EVERY geometry step (per live-resize
+// tracking tick), not on settle — the Continuous Real-Time Live Resize Law.
 //
 // Fill the slots through the single accessor below:
 //   WindowEvent_setOnResized(Window_getLifecycle(w), myOnResized);
+//   WindowEvent_setOnMoved(Window_getLifecycle(w), myOnMoved);
 // Null-safe: nullptr when window is nullptr. This accessor is the ONLY
 // outside path to the embedded registry.
 void Window_addKeyAdapter(Window *window, const KeyHandler *adapter);

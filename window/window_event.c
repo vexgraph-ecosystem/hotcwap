@@ -51,7 +51,9 @@
  * ----------------------------------------------------------------------------
  *   void *self;                            // opaque owner of every slot
  *   WindowQuitRequestedFn onQuitRequested;  // vetoable quit request
+ *   WindowNoArgFn onAfterQuit;              // fired after window destroyed
  *   WindowResizedFn onResized;              // content size changed (pixels)
+ *   WindowMovedFn onMoved;                  // window origin changed (desktop points)
  *   WindowNoArgFn onFullscreen;             // entered fullscreen
  *   WindowNoArgFn onMinimized;              // minimized
  *   WindowNoArgFn onRestored;               // back to normal
@@ -59,6 +61,7 @@
  *   WindowNoArgFn onFocusGained;            // key window became THIS window
  *   WindowNoArgFn onFocusLost;              // key window left THIS window
  *   WindowNoArgFn onZoomFilled;             // double-click header zoom-to-fill
+ *   WindowNoArgFn onZoomBack;               // exited zoom-to-fill
  *   WindowOcclusionFn onOcclusionChanged;   // occlusion flipped (visible flag)
  *
  * PRIVATE HELPERS:
@@ -75,7 +78,9 @@
  *
  * Public Core Functions: (.h)
  *   - WindowEvent_fireQuitRequested(self, window) : Dispatches quit query (returns true if may quit)
+ *   - WindowEvent_fireAfterQuit(self, window)     : Dispatches post-destroy notification
  *   - WindowEvent_fireResized(self, window, width, height) : Dispatches resize notification
+ *   - WindowEvent_fireMoved(self, window, x, y)    : Dispatches window-move notification
  *   - WindowEvent_fireFullscreen(self, window)    : Dispatches fullscreen transition
  *   - WindowEvent_fireMinimized(self, window)     : Dispatches minimize transition
  *   - WindowEvent_fireRestored(self, window)      : Dispatches restore transition
@@ -83,6 +88,7 @@
  *   - WindowEvent_fireFocusGained(self, window)   : Dispatches focus gained notification
  *   - WindowEvent_fireFocusLost(self, window)     : Dispatches focus lost notification
  *   - WindowEvent_fireZoomFilled(self, window)    : Dispatches header zoom notification
+ *   - WindowEvent_fireZoomBack(self, window)      : Dispatches zoom-exit notification
  *   - WindowEvent_fireOcclusionChanged(self, window, visible) : Dispatches occlusion update
  *
  * Private Core Functions: (.c static)
@@ -91,7 +97,9 @@
  * Public Setters: (.h)
  *   - WindowEvent_setSelf(self, owner)
  *   - WindowEvent_setOnQuitRequested(self, fn)
+ *   - WindowEvent_setOnAfterQuit(self, fn)
  *   - WindowEvent_setOnResized(self, fn)
+ *   - WindowEvent_setOnMoved(self, fn)
  *   - WindowEvent_setOnFullscreen(self, fn)
  *   - WindowEvent_setOnMinimized(self, fn)
  *   - WindowEvent_setOnRestored(self, fn)
@@ -99,6 +107,7 @@
  *   - WindowEvent_setOnFocusGained(self, fn)
  *   - WindowEvent_setOnFocusLost(self, fn)
  *   - WindowEvent_setOnZoomFilled(self, fn)
+ *   - WindowEvent_setOnZoomBack(self, fn)
  *   - WindowEvent_setOnOcclusionChanged(self, fn)
  *
  * Private Setters: (.c static)
@@ -107,7 +116,9 @@
  * Public Getters: (.h)
  *   - WindowEvent_getSelf(self)
  *   - WindowEvent_getOnQuitRequested(self)
+ *   - WindowEvent_getOnAfterQuit(self)
  *   - WindowEvent_getOnResized(self)
+ *   - WindowEvent_getOnMoved(self)
  *   - WindowEvent_getOnFullscreen(self)
  *   - WindowEvent_getOnMinimized(self)
  *   - WindowEvent_getOnRestored(self)
@@ -115,6 +126,7 @@
  *   - WindowEvent_getOnFocusGained(self)
  *   - WindowEvent_getOnFocusLost(self)
  *   - WindowEvent_getOnZoomFilled(self)
+ *   - WindowEvent_getOnZoomBack(self)
  *   - WindowEvent_getOnOcclusionChanged(self)
  *
  * Private Getters: (.c static)
@@ -128,7 +140,9 @@ bool WindowEvent_init(WindowEvent *self) {
         return false;
     (*self).self = nullptr;
     (*self).onQuitRequested = nullptr;
+    (*self).onAfterQuit = nullptr;
     (*self).onResized = nullptr;
+    (*self).onMoved = nullptr;
     (*self).onFullscreen = nullptr;
     (*self).onMinimized = nullptr;
     (*self).onRestored = nullptr;
@@ -136,6 +150,7 @@ bool WindowEvent_init(WindowEvent *self) {
     (*self).onFocusGained = nullptr;
     (*self).onFocusLost = nullptr;
     (*self).onZoomFilled = nullptr;
+    (*self).onZoomBack = nullptr;
     (*self).onOcclusionChanged = nullptr;
     return true;
 }
@@ -149,12 +164,28 @@ bool WindowEvent_fireQuitRequested(WindowEvent *self, Window *window) {
     return (*self).onQuitRequested((*self).self, window);
 }
 
+void WindowEvent_fireAfterQuit(WindowEvent *self, Window *window) {
+    if(self == nullptr)
+        return;
+    if((*self).onAfterQuit == nullptr)
+        return;
+    (*self).onAfterQuit((*self).self, window);
+}
+
 void WindowEvent_fireResized(WindowEvent *self, Window *window, int width, int height) {
     if(self == nullptr)
         return;
     if((*self).onResized == nullptr)
         return;
     (*self).onResized((*self).self, window, width, height);
+}
+
+void WindowEvent_fireMoved(WindowEvent *self, Window *window, int x, int y) {
+    if(self == nullptr)
+        return;
+    if((*self).onMoved == nullptr)
+        return;
+    (*self).onMoved((*self).self, window, x, y);
 }
 
 void WindowEvent_fireFullscreen(WindowEvent *self, Window *window) {
@@ -213,6 +244,14 @@ void WindowEvent_fireZoomFilled(WindowEvent *self, Window *window) {
     (*self).onZoomFilled((*self).self, window);
 }
 
+void WindowEvent_fireZoomBack(WindowEvent *self, Window *window) {
+    if(self == nullptr)
+        return;
+    if((*self).onZoomBack == nullptr)
+        return;
+    (*self).onZoomBack((*self).self, window);
+}
+
 void WindowEvent_fireOcclusionChanged(WindowEvent *self, Window *window, bool visible) {
     if(self == nullptr)
         return;
@@ -238,10 +277,24 @@ void WindowEvent_setOnQuitRequested(WindowEvent *self, WindowQuitRequestedFn fn)
 }
 
 ;;SETTER
+void WindowEvent_setOnAfterQuit(WindowEvent *self, WindowNoArgFn fn) {
+    if(self == nullptr)
+        return;
+    (*self).onAfterQuit = fn;
+}
+
+;;SETTER
 void WindowEvent_setOnResized(WindowEvent *self, WindowResizedFn fn) {
     if(self == nullptr)
         return;
     (*self).onResized = fn;
+}
+
+;;SETTER
+void WindowEvent_setOnMoved(WindowEvent *self, WindowMovedFn fn) {
+    if(self == nullptr)
+        return;
+    (*self).onMoved = fn;
 }
 
 ;;SETTER
@@ -294,6 +347,13 @@ void WindowEvent_setOnZoomFilled(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+void WindowEvent_setOnZoomBack(WindowEvent *self, WindowNoArgFn fn) {
+    if(self == nullptr)
+        return;
+    (*self).onZoomBack = fn;
+}
+
+;;SETTER
 void WindowEvent_setOnOcclusionChanged(WindowEvent *self, WindowOcclusionFn fn) {
     if(self == nullptr)
         return;
@@ -317,10 +377,24 @@ WindowQuitRequestedFn WindowEvent_getOnQuitRequested(const WindowEvent *self) {
 }
 
 ;;GETTER
+WindowNoArgFn WindowEvent_getOnAfterQuit(const WindowEvent *self) {
+    if(self == nullptr)
+        return nullptr;
+    return (*self).onAfterQuit;
+}
+
+;;GETTER
 WindowResizedFn WindowEvent_getOnResized(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
     return (*self).onResized;
+}
+
+;;GETTER
+WindowMovedFn WindowEvent_getOnMoved(const WindowEvent *self) {
+    if(self == nullptr)
+        return nullptr;
+    return (*self).onMoved;
 }
 
 ;;GETTER
@@ -370,6 +444,13 @@ WindowNoArgFn WindowEvent_getOnZoomFilled(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
     return (*self).onZoomFilled;
+}
+
+;;GETTER
+WindowNoArgFn WindowEvent_getOnZoomBack(const WindowEvent *self) {
+    if(self == nullptr)
+        return nullptr;
+    return (*self).onZoomBack;
 }
 
 ;;GETTER

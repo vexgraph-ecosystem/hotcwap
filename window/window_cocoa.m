@@ -30,6 +30,7 @@
 #include <math.h>
 
 #include "window/window.h"
+#include "window/traffic_light.h"
 #include "input/focus.h"
 #include "input/key.h"
 #include "input/mouse.h"
@@ -52,9 +53,11 @@
  * Decoupling Law, serving solely as a dumb presentation surface and callback bridge.
  *
  * Dispatches input events directly into vexspoke device rings (Key, Mouse, Touch)
- * and forwards window lifecycle state changes (geometry resize, minimize, restore,
- * fullscreen, key focus, and vetoable termination requests) through the embedded
- * WindowEvent registry on Thread 0.
+ * and forwards window lifecycle state changes (geometry resize + move, minimize,
+ * restore, fullscreen, key focus, and vetoable termination requests) through the
+ * embedded WindowEvent registry on Thread 0. Geometry is reflected EVERY tracking
+ * step — onResized(w,h) and onMoved(x,y) both fire the moment the window changes,
+ * not on settle.
  * ============================================================================
  */
 
@@ -69,7 +72,7 @@
  *   the engine loop constructs it, configures the chrome, shows it, then pumps
  *   Window_pollEvents once per frame while a render path draws through the
  *   content view / event bridges. OS input is routed into the vexspoke device
- *   rings (tagged with this window's id); OS lifecycle (quit, resize,
+ *   rings (tagged with this window's id); OS lifecycle (quit, resize, move,
  *   fullscreen, minimize, restore, press, focus, zoom) fires the embedded
  *   WindowEvent. Zero Vulkan, zero Metal, zero compositing — a Window is a
  *   dumb surface + callback bridge per the Window Decoupling Law.
@@ -97,11 +100,7 @@
  *   bool lastFocused;             // focus-flip detection during the pump
  *   _Atomic uint32_t monitorId;   // CGDirectDisplayID mirror (0 = unmapped)
  *   WindowCursorType cursorType;  // active OS cursor style
- *   bool lightVisible[3];       // macOS traffic-light visibility (close/mini/zoom)
- *   float lightOX;              // traffic-light cluster offset X from native layout
- *   float lightOY;              // traffic-light cluster offset Y from native layout
- *   bool lightBaseSet;          // lightBase[] snapshot taken yet
- *   NSRect lightBase[3];        // native close/mini/zoom frames at snapshot time
+ *   TrafficLight *trafficLights;  // macOS traffic-light chrome controller (window/traffic_light.h)
  *   WindowResizeRenderFn resizeRenderFn;  // resize-cadence render hook
  *   void *resizeRenderUserdata;   // hook userdata
  *
@@ -342,15 +341,11 @@ struct Window {
     _Atomic uint32_t monitorId;
     WindowCursorType cursorType;
 
-    // Traffic-light chrome (NAKED full-size content floats them over content):
-    // per-button visibility + a cluster offset relative to the native layout,
-    // snapshotted whenever the style mask changes so the offset always reads
-    // "shifted from the current native layout".
-    bool lightVisible[3];  // close / mini / zoom
-    float lightOX;         // cluster offset in points from the native layout
-    float lightOY;
-    bool lightBaseSet;     // lightBase[] snapshotted yet
-    NSRect lightBase[3];   // native close/mini/zoom frames at snapshot time
+    // Traffic-light chrome lives in the segregated TrafficLight class (window/
+    // traffic_light.h); the window owns ONE instance and forwards the
+    // Window_macOS_* / setFloatingTrafficLights surface to it (the Single
+    // Class Per File Law). nullptr = never created (headless / BORDERLESS).
+    TrafficLight *trafficLights;
 
     WindowResizeRenderFn resizeRenderFn;
     void *resizeRenderUserdata;
@@ -445,6 +440,7 @@ static Window *windowHandleOf(NSWindow *window) {
 // time, so layer frame + drawableSize + the forced present land in the same
 // composite pass as the moved edge.
 static void windowRefreshSize(Window *window);
+static void windowRefreshOrigin(Window *window);
 @interface WindowContentView : NSView
 @end
 
@@ -458,8 +454,14 @@ static void windowRefreshSize(Window *window);
     Window *w = windowHandleOf([self window]);
     if (getenv("VEX_GEOMETRY_LOG") != nullptr)
         fprintf(stderr, "sf: %.0fx%.0f\n", newSize.width, newSize.height);
-    if (w)
+    if (w) {
         windowRefreshSize(w);
+        // A drag off the top or left edge changes BOTH the content size and
+        // the window origin in the same tracking tick; refresh the origin here
+        // so onMoved fires per step alongside onResized (windowDidMove: is the
+        // post-display backup, exactly as windowDidResize: is for size).
+        windowRefreshOrigin(w);
+    }
 }
 
 - (void)viewWillStartLiveResize {
@@ -529,8 +531,19 @@ static void windowRefreshSize(Window *window);
     Window *w = self.handlePtr;
     if (getenv("VEX_GEOMETRY_LOG") != nullptr)
         fprintf(stderr, "dr:\n");
-    if (w)
+    if (w) {
         windowRefreshSize(w);
+        windowRefreshOrigin(w);
+    }
+}
+
+- (void)windowDidMove:(NSNotification*) notification {
+    (void) notification;
+    Window *w = self.handlePtr;
+    if (getenv("VEX_GEOMETRY_LOG") != nullptr)
+        fprintf(stderr, "dm:\n");
+    if (w)
+        windowRefreshOrigin(w);
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification*) notification {
@@ -671,6 +684,33 @@ static void windowRefreshSize(Window *window) {
                     && ![nsw isMiniaturized]
                     && (*window).resizeRenderFn)
                 (*window).resizeRenderFn((*window).resizeRenderUserdata);
+        }
+    }
+}
+
+// Move reflection: top-left screen coords (the same space Window_setLocation
+// speaks) plus the CONTENT top-left (below the title bar) cached for
+// Window_getContentOrigin. Fires onMoved only when the top-left actually
+// changed, so a renderer polling once per frame pays two compares. Called from
+// the per-step setFrameSize: seam (a top/left-edge resize moves the origin in
+// the same tracking tick), from windowDidMove: (post-display backup), and from
+// the pump reflection pass. Thread 0 only.
+static void windowRefreshOrigin(Window *window) {
+    if (window == nullptr || (*window).nsWindow == nil)
+        return;
+    @autoreleasepool {
+        NSWindow *nsw = (*window).nsWindow;
+        NSRect frame = [nsw frame];
+        NSRect content = [nsw contentRectForFrameRect:frame];
+        CGFloat screenHeight = [[NSScreen mainScreen] frame].size.height;
+        double tx = (double) frame.origin.x;
+        double ty = (double) (screenHeight - frame.origin.y - frame.size.height);
+        (*window).cachedContentX = (double) frame.origin.x;
+        (*window).cachedContentY = (double) (screenHeight - content.origin.y - content.size.height);
+        if (tx != (*window).cachedX || ty != (*window).cachedY) {
+            (*window).cachedX = tx;
+            (*window).cachedY = ty;
+            WindowEvent_fireMoved(&(*window).lifecycle, window, (int) tx, (int) ty);
         }
     }
 }
@@ -963,19 +1003,8 @@ void Window_pollEvents(void) {
             windowRefreshSize(handle);
 
             // Move reflection: top-left screen coords, same space
-            // setLocation speaks. No WindowEvent slot (the registry has no
-            // onMoved) — the cache feeds Window_getLocation only.
-            NSRect frame = [w frame];
-            NSRect content = [w contentRectForFrameRect:frame];
-            CGFloat screenHeight = [[NSScreen mainScreen] frame].size.height;
-            double tx = (double) frame.origin.x;
-            double ty = (double) (screenHeight - frame.origin.y - frame.size.height);
-            (*handle).cachedX = tx;
-            (*handle).cachedY = ty;
-            double cx = (double) frame.origin.x;
-            double cy = (double) (screenHeight - content.origin.y - content.size.height);
-            (*handle).cachedContentX = cx;
-            (*handle).cachedContentY = cy;
+            // Window_setLocation speaks; fires onMoved on a real change.
+            windowRefreshOrigin(handle);
 
             // Focus flip: mirror the OS spotlight into the WindowEvent slots.
             windowRefreshFocus(handle, keyWindow);
@@ -984,11 +1013,6 @@ void Window_pollEvents(void) {
         }
     }
 }
-
-// Traffic-light indices into the lightVisible[]/lightBase[] arrays (kept
-// beside the constructors: windowAlloc seeds visibility, refreshChrome and
-// the Window_macOS_* setters consume it further below).
-enum { LIGHT_CLOSE = 0, LIGHT_MINI = 1, LIGHT_ZOOM = 2 };
 
 // Key-gate window subclass: while a modal dialog holds its parent, the
 // parent's C flag flips and AppKit itself refuses it key — no focus flash,
@@ -1106,11 +1130,9 @@ static Window *windowAlloc(const WindowDesc *desc) {
         (*w).lastFocused = false;
         atomic_store_explicit(&(*w).monitorId, 0, memory_order_relaxed);
         (*w).cursorType = WINDOW_CURSOR_DEFAULT;
-        (*w).lightVisible[LIGHT_CLOSE] = true;
-        (*w).lightVisible[LIGHT_MINI] = true;
-        (*w).lightVisible[LIGHT_ZOOM] = true;
-        (*w).lightOX = 0.0f;
-        (*w).lightOY = 0.0f;
+        // Traffic-light chrome controller (all three lights visible by default).
+        // Created against the NSWindow; nullptr only if calloc fails.
+        (*w).trafficLights = TrafficLight_create((__bridge void*) window);
         (*w).resizeRenderFn = nullptr;
         (*w).resizeRenderUserdata = nullptr;
         (*w).id = windowIdAcquire(window, w);
@@ -1193,6 +1215,7 @@ void Window_destroy(Window *window) {
         Key_detachWindowAll((*window).id);
         Mouse_detachWindowAll((*window).id);
         Touch_detachWindowAll((*window).id);
+        TrafficLight_destroy((*window).trafficLights);
         windowIdRelease((*window).id);
     }
     free(window);
@@ -1353,35 +1376,16 @@ static void updateStyleMask(Window *window, NSWindowStyleMask add, NSWindowStyle
     [(*window).nsWindow setStyleMask:(mask & ~clear) | add];
 }
 
-// Re-apply the traffic-light chrome: per-button visibility, then re-seat the
-// cluster offset relative to the native layout (snapshotted on first touch;
-// the snapshot is invalidated whenever the style mask changes). Pure public
-// AppKit (standardWindowButton: + setHidden:/setFrameOrigin:) — no private API.
-// BORDERLESS windows own no lights to re-seat.
+// Re-apply the traffic-light chrome through the segregated TrafficLight class
+// (window/traffic_light.h): per-button visibility, then re-seat the cluster
+// offset relative to the native layout (snapshotted on first touch; the
+// snapshot is invalidated whenever the style mask changes). Pure public AppKit
+// (standardWindowButton: + setHidden:/setFrameOrigin:) — no private API.
+// BORDERLESS windows own no lights to re-seat. Null-safe.
 static void refreshChrome(Window *w) {
-    NSWindow *nsw = (*w).nsWindow;
-    NSButton *buttons[3];
-    buttons[LIGHT_CLOSE] = [nsw standardWindowButton:NSWindowCloseButton];
-    buttons[LIGHT_MINI] = [nsw standardWindowButton:NSWindowMiniaturizeButton];
-    buttons[LIGHT_ZOOM] = [nsw standardWindowButton:NSWindowZoomButton];
-
-    if (!(*w).lightBaseSet) {
-        for (int i = 0; i < 3; i++)
-            (*w).lightBase[i] = buttons[i] ? [buttons[i] frame] : NSZeroRect;
-        (*w).lightBaseSet = true;
-    }
-
-    for (int i = 0; i < 3; i++) {
-        if (buttons[i] == nil)
-            continue;
-        [buttons[i] setHidden:(*w).lightVisible[i] ? NO : YES];
-        if ((*w).lightVisible[i] && !NSIsEmptyRect((*w).lightBase[i])) {
-            NSPoint origin = (*w).lightBase[i].origin;
-            origin.x += (CGFloat)(*w).lightOX;
-            origin.y += (CGFloat)(*w).lightOY;
-            [buttons[i] setFrameOrigin:origin];
-        }
-    }
+    if (w == nullptr)
+        return;
+    TrafficLight_refresh((*w).trafficLights);
 }
 
 void Window_setTitle(Window *window, const char *title) {
@@ -1607,7 +1611,7 @@ void Window_setUndecorated(Window *window, int mode) {
 
         // Mask (and therefore the native light layout) changed: re-snapshot and
         // re-apply per-button visibility + offset against the new layout.
-        (*window).lightBaseSet = false;
+        TrafficLight_resetBase((*window).trafficLights);
         refreshChrome(window);
     }
 }
@@ -1654,18 +1658,20 @@ void Window_setFloatingTrafficLights(Window *window, bool floating) {
             [(*window).nsWindow setTitleVisibility:NSWindowTitleVisible];
         }
         // Native light layout changed with the mask: re-snapshot, re-seat.
-        (*window).lightBaseSet = false;
+        TrafficLight_resetBase((*window).trafficLights);
         refreshChrome(window);
     }
 }
 
+// Map the public WindowTrafficLight enum onto the TrafficLight class's button
+// index (the values coincide: close=0, miniaturize=1, zoom=2). -1 = unknown.
 static int lightIndex(WindowTrafficLight light) {
     if (light == WINDOW_TRAFFIC_LIGHT_CLOSE)
-        return LIGHT_CLOSE;
+        return TRAFFIC_LIGHT_CLOSE;
     if (light == WINDOW_TRAFFIC_LIGHT_MINIMIZE)
-        return LIGHT_MINI;
+        return TRAFFIC_LIGHT_MINIATURIZE;
     if (light == WINDOW_TRAFFIC_LIGHT_ZOOM)
-        return LIGHT_ZOOM;
+        return TRAFFIC_LIGHT_ZOOM;
     return -1;
 }
 
@@ -1676,8 +1682,7 @@ void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLigh
     if (i < 0)
         return;
     @autoreleasepool {
-        (*window).lightVisible[i] = visible;
-        refreshChrome(window);
+        TrafficLight_setButtonVisible((*window).trafficLights, (TrafficLightButton) i, visible);
     }
 }
 
@@ -1685,48 +1690,22 @@ bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTraffi
     int i = lightIndex(light);
     if (window == nullptr || i < 0)
         return false;
-    return (*window).lightVisible[i];
+    return TrafficLight_isButtonVisible((*window).trafficLights, (TrafficLightButton) i);
 }
 
 void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y) {
     if (window == nullptr)
         return;
     @autoreleasepool {
-        NSWindow *nsw = (*window).nsWindow;
-        NSButton *close = [nsw standardWindowButton:NSWindowCloseButton];
-        if (close == nil)
-            return; // BORDERLESS: no lights to seat.
-        if (!(*window).lightBaseSet)
-            refreshChrome(window); // snapshot the native layout first (offset 0: no-op)
-        NSRect base = (*window).lightBase[LIGHT_CLOSE];
-        if (NSIsEmptyRect(base))
-            return;
-        CGFloat h = [[nsw contentView] bounds].size.height;
-        CGFloat wantX = (CGFloat) x;
-        CGFloat wantY = h - (CGFloat) y - base.size.height;
-        (*window).lightOX = (float) (wantX - base.origin.x);
-        (*window).lightOY = (float) (wantY - base.origin.y);
-        refreshChrome(window);
+        TrafficLight_setHeaderPosition((*window).trafficLights, x, y);
     }
 }
 
 void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY) {
     float x = 0.0f;
     float y = 0.0f;
-    if (window != nullptr) {
-        @autoreleasepool {
-            NSWindow *nsw = (*window).nsWindow;
-            NSButton *close = [nsw standardWindowButton:NSWindowCloseButton];
-            NSRect base = (*window).lightBase[LIGHT_CLOSE];
-            if (close != nil && (*window).lightBaseSet && !NSIsEmptyRect(base)) {
-                CGFloat h = [[nsw contentView] bounds].size.height;
-                CGFloat curX = base.origin.x + (CGFloat)(*window).lightOX;
-                CGFloat curY = base.origin.y + (CGFloat)(*window).lightOY;
-                x = (float) curX;
-                y = (float) (h - curY - base.size.height);
-            }
-        }
-    }
+    if (window != nullptr)
+        TrafficLight_getHeaderPosition((*window).trafficLights, &x, &y);
     if (outX)
         *outX = x;
     if (outY)
