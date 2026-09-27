@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -398,6 +399,51 @@ static bool snapshot_begin(HotModule *hot) {
 // old handles, adopt new, swap trampoline rows. Generation only advances on
 // full success, so a failed swap re-enters the handshake on the next poll
 // and self-heals once the payload is fixed.
+static uint32_t s_loadSerial = 0;
+
+static bool hot_mkdir_p(const char *path) {
+    char tmp[HOT_PATH_LEN];
+    size_t len = snprintf(tmp, sizeof(tmp), "%s", path);
+    if (len == 0 || len >= sizeof(tmp))
+        return false;
+    for (size_t i = 1; i < len; i++) {
+        if (tmp[i] != '/')
+            continue;
+        tmp[i] = '\0';
+        if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+            return false;
+        tmp[i] = '/';
+    }
+    if (mkdir(path, 0755) != 0 && errno != EEXIST)
+        return false;
+    return true;
+}
+
+static bool hot_copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in)
+        return false;
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return false;
+    }
+    unsigned char buf[8192];
+    size_t n = 0;
+    bool ok = true;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    if (ferror(in))
+        ok = false;
+    fclose(out);
+    fclose(in);
+    return ok;
+}
+
 static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outLoaded) {
     HotTrampolineTable *table = &(*hot).trampolines;
     HotRetireRing *ring = &(*hot).retireRing;
@@ -441,13 +487,31 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
             return HOT_ERROR_FILE_NOT_FOUND;
         }
 
-        void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        // dyld caches a loaded image by path, so a replaced file at the SAME
+        // path is NOT re-read — the swap would silently keep the old code.
+        // Load from a per-swap unique copy (Generation-Unique Load Path) so
+        // every generation is a genuinely fresh image.
+        char loadDir[HOT_PATH_LEN];
+        snprintf(loadDir, sizeof(loadDir), "%s/cache/load/%s/%u",
+                 MANIFEST_ROOT(), (*hot).library, ++s_loadSerial);
+        char loadPath[HOT_PATH_LEN];
+        snprintf(loadPath, sizeof(loadPath), "%s/%s", loadDir, name);
+        if (!hot_mkdir_p(loadDir) || !hot_copy_file(path, loadPath)) {
+            closedir(dir);
+            for (uint32_t i = 0; i < stagedCount; i++)
+                dlclose(staged[i].handle);
+            snprintf((*hot).last_error, sizeof((*hot).last_error),
+                     "cannot stage a unique load copy for %s", name);
+            return HOT_ERROR_FILE_NOT_FOUND;
+        }
+
+        void *handle = dlopen(loadPath, RTLD_NOW | RTLD_LOCAL);
         if (!handle) {
             closedir(dir);
             for (uint32_t i = 0; i < stagedCount; i++)
                 dlclose(staged[i].handle);
             snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "dlopen(%s) failed: %s", path, dlerror());
+                     "dlopen(%s) failed: %s", loadPath, dlerror());
             return HOT_ERROR_DLOPEN_FAILED;
         }
 
@@ -592,10 +656,10 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
 }
 
 HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
+    if (loaded_count)
+        (*loaded_count) = 0;   // always define the out-count, even on rejection
     if (!hot)
         return HOT_ERROR_FILE_NOT_FOUND;
-    if (loaded_count)
-        (*loaded_count) = 0;
 
     HotRetireRing_advance(&(*hot).retireRing);
 
