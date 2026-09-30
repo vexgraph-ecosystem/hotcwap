@@ -19,15 +19,15 @@
 // backend could later drop in with zero changes above this header.
 //
 // The method surface mirrors the legacy macOSWindow (the FFM backend that
-// lived in _legacy-java): title/size/position, chrome capability toggles
+// lived in legacy-java): title/size/position, chrome capability toggles
 // (resizable/closable/miniaturizable/traffic lights), fullscreen, minimize,
 // undecorated (naked) chrome, DRM (sharing) mode, and size constraints.
 //
 // Three state families live on the handle:
 //   POLICY    — present pacing + clear color + transparency. Written by
 //               thread 0 any time; the GPU consumer polls them through
-//               atomic words and watches renderGeneration for swapchain
-//               rebuilds. Zero allocation, zero locks.
+//               atomic words and watches renderGeneration for policy changes.
+//               Zero allocation, zero locks.
 //   CONTENT   — exactly ONE container slot. nullptr root => the renderer has
 //               nothing to draw and degrades to a clear-only pass. All
 //               nesting happens INSIDE that root via Panel_addContainer;
@@ -50,9 +50,8 @@ typedef struct Panel Panel;
 #define WINDOW_UNDECORATED_BORDERLESS 1 // no title bar and no traffic lights
 #define WINDOW_UNDECORATED_NAKED      2 // transparent title bar, hidden title, traffic lights kept
 
-// Present pacing. What MoltenVK actually exposes — FIFO paces frames to the
-// display (vsync), IMMEDIATE submits unthrottled. Naming follows the Vulkan
-// present modes they map onto, not marketing words.
+// Legacy pacing policy names; the on-demand Metal drawable presenter owns
+// scheduling. These constants do not select Vulkan presentation modes.
 #define WINDOW_PRESENT_FIFO      0 // display-synced, capped (default)
 #define WINDOW_PRESENT_IMMEDIATE 1 // uncapped, no sync
 
@@ -60,11 +59,11 @@ typedef struct Panel Panel;
 // what it wants to change. Zero it for pure defaults.
 typedef struct WindowDesc {
     const char *title;   // default "vex"
-    int width;           // default 800
-    int height;          // default 600
+    int width;           // physical display pixels, default 800 (Native Pixel Law)
+    int height;          // physical display pixels, default 600 (Native Pixel Law)
     int x;               // top-left, default 0 (only honored when non-zero)
     int y;               // default 0 (only honored when non-zero)
-    bool centered;       // default true — the window lands centered on the main
+    bool centered;       // default true — the window lands centered on the _main
                          // screen's visible frame; only a non-zero x/y defeats it
     bool shown;          // default false — construct hidden, show() when ready
 } WindowDesc;
@@ -77,7 +76,7 @@ typedef struct WindowDesc {
 //   Window_new(&(WindowDesc){…}) -> every other field (x/y/centered/shown)
 //
 // All variants construct HIDDEN: construct -> mutate -> Window_show().
-// Placement defaults to centered on the main screen's visible frame (like an
+// Placement defaults to centered on the _main screen's visible frame (like an
 // application should be); pass .x/.y in WindowDesc for a custom placement.
 // The macro is function-like, so it never fires when `Window` is used as the
 // type name — only at call sites with parentheses.
@@ -113,12 +112,22 @@ void Window_setShouldClose(Window *window, bool shouldClose);
 
 // Drain the OS event queue. Call once per frame from the engine loop.
 void Window_pollEvents(void);
+// Interactive graphics pump: service at most one queued OS event, then let the
+// caller dispatch input and present before consuming the next event. Returns
+// true if more OS events are already queued (do not park between steps).
+bool Window_pollEventStep(void);
 
-// --- Title / size / position ---
+// Block until an OS event arrives (or timeoutMs elapses), then dispatch it once.
+// The park half of poll-then-park: pair with Window_pollEventStep — drain while
+// events are queued, wait when they are not, so an idle window costs no CPU.
+// timeoutMs <= 0 waits indefinitely. Thread 0 (the app thread) only.
+void Window_waitEvents(Window *window, int timeoutMs);
+
+// --- Title / size / position (Native Pixel Law: width/height speak in native physical pixels) ---
 void Window_setTitle(Window *window, const char *title);
-int  Window_width(Window *window);
-int  Window_height(Window *window);
-void Window_setSize(Window *window, int width, int height);
+int  Window_width(Window *window);  // content width in native physical display pixels
+int  Window_height(Window *window); // content height in native physical display pixels
+void Window_setSize(Window *window, int width, int height); // physical display pixels
 void Window_setLocation(Window *window, int x, int y);
 // Top-left corner in global desktop points (the space setLocation speaks).
 void Window_getLocation(const Window *window, int *outX, int *outY);
@@ -131,45 +140,47 @@ void Window_show(Window *window);
 void Window_hide(Window *window);
 void Window_setVisible(Window *window, bool visible);
 
+// --- Native pixel & DPI scale helpers (Native Pixel Law) ---
+float Window_getScale(const Window *window); // active backing scale factor (e.g. 2.0 on Retina, 1.0 on standard)
+void  Window_revalidate(Window *window);     // recompute points geometry across screen DPI transitions
+void  Window_setSizePoints(Window *window, float width, float height);
+void  Window_getSizePoints(const Window *window, float *outWidth, float *outHeight);
+float Window_widthPoints(const Window *window);
+float Window_heightPoints(const Window *window);
+
+// --- Viewport of content vs Window frame (Anchoring Law) --------------------
+// The content viewport is the visible canvas for content that UI panels anchor against.
+// The window size is the supplementary OS container.
+int   Window_viewportWidth(const Window *window);
+int   Window_viewportHeight(const Window *window);
+float Window_viewportWidthPoints(const Window *window);
+float Window_viewportHeightPoints(const Window *window);
+int   Window_windowWidth(const Window *window);
+int   Window_windowHeight(const Window *window);
+float Window_windowWidthPoints(const Window *window);
+float Window_windowHeightPoints(const Window *window);
+
 // --- Content: owned by Frame, never by the Window ---------------------------
 //
-// The Window Decoupling Law: a Window is a dumb surface + callback bridge —
-// it holds zero Panels. The Frame owns the two board roots (contentPane =
-// upper UI canvas, scenePane = bottom backdrop, both borrowed and nullable,
-// set via Frame_setContentPane / Frame_setScenePane) and hands explicit
-// Panel* arguments to the board-attach calls below. A bare window with no
-// borrower stays a plain AppKit window: Vulkan boots only once a borrower
-// attaches a render surface through graphvex.
+// A Window owns AppKit state and events, not Panels or render targets. Darling
+// Frame owns the single Metal seam and two retained offscreen Vulkan Boards.
 
 // --- Graphics boards: opaque platform layers owned by graphvex -------------
 //
-// The decoupled stack (the Window Decoupling Law): the window shim owns PARENTING ONLY, the
-// graphics shim (graphvex GraphicsLayer) owns CONTENT ONLY (device,
-// drawableSize, swapchain). Both slots are void*: the window stores them,
-// parents them, and orders them — never dereferences them, never creates
-// them. nullptr = board absent (bare window: pure AppKit, zero GPU).
-//   - bottomLayer: scene board (3D viewport) — parents above the blur view.
-//   - topLayer: content board (UI canvas) — parents above the scene board.
-// Stack bottom-to-top: NSWindow -> blur -> bottomLayer -> topLayer.
+// Compatibility-only layer slots; no on-screen per-board layers are created.
+// The real scene/content targets are offscreen and composite into the Frame seam.
 void   Window_setBottomLayer(Window *window, void *layer);
 void  *Window_getBottomLayer(const Window *window);
 void   Window_setTopLayer(Window *window, void *layer);
 void  *Window_getTopLayer(const Window *window);
 // Re-assert stack order (blur back, bottom, top front). Thread 0 only;
-// off-thread callers are bounced to the main queue asynchronously.
+// off-thread callers are bounced to the _main queue asynchronously.
 void   Window_orderLayers(Window *window);
 
 // --- Board compositing seam (inert no-op, retained for the migrating
 //     darling compositor) ----------------------------------------------------
 //
-// ;;INTENTION("The pane-era model (per-scene CAMetalLayer + VkPane swapchain)
-// is retired: a window owns exactly ONE on-screen Metal layer — the seam
-// canvas — and the scene/content boards are retained OFFSCREEN VkLayer
-// targets composited into it by the render repo (the Window Compositing
-// Layer Order Law + the Single-Seam Canvas Law). These four declarations
-// stay as inert no-op seams so the still-migrating darling compositor call
-// sites link; real parenting lives in the opaque layer slots below
-// (Window_setBottomLayer/setTopLayer + Window_orderLayers).")
+// Retired pane calls remain inert until their archived callers are removed.
 
 bool Window_attachPanes(Window *window, Panel *panel, int width, int height);
 bool Window_resizePanes(Window *window, Panel *panel, int width, int height);
@@ -179,9 +190,7 @@ void Window_compositeBoards(Window *window);
 // --- Present policy -----------------------------------------------------------
 //
 // Written by thread 0 whenever; consumed by the GPU thread through atomic
-// loads. presentMode and transparent participate in the swapchain, so a
-// change bumps Window_renderGeneration(); the consumer compares generations
-// and rebuilds targets on drift (same reflection contract as resize).
+// loads. Policy changes bump Window_renderGeneration() for consumers.
 //
 // NOTE: there is deliberately NO background color here. Color is content —
 // it lives on the Frame-owned board panels, and the
@@ -191,15 +200,17 @@ void Window_compositeBoards(Window *window);
 void     Window_setPresentMode(Window *window, int mode);
 int      Window_getPresentMode(const Window *window);
 
-// Composite transparency for the swapchain surface. Selecting true asks the
-// rebuild path to pick a non-opaque compositeAlpha from what the driver
-// actually supports.
+// Window transparency policy; the renderer selects the matching Metal format.
 void Window_setTransparent(Window *window, bool transparent);
 bool Window_isTransparent(const Window *window);
 
-// Monotonic counter bumped by thread 0 whenever presentMode or transparent
-// changed. Renderers compare their last-applied generation against this and
-// rebuild the swapchain when it moved.
+// Raster presentation: copy a tightly packed opaque RGBA8 buffer (byte order
+// R,G,B,A; native px; top-left origin, Y-down) into the window's content view.
+// `stride` is the row pitch in bytes (>= width*4). Thread 0 only. The buffer is
+// referenced, not copied, so it must stay valid until the next present.
+void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int width, int height);
+
+// Monotonic counter bumped by thread 0 whenever presentation policy changes.
 uint64_t Window_renderGeneration(const Window *window);
 
 // --- Runtime state ---
@@ -212,10 +223,7 @@ bool Window_isEnabled(const Window *window);
 
 // Live-resize flag: set by thread 0 while AppKit is inside an active window
 // drag (NSViewLiveResize). The renderer reads it to keep presenting the
-// current chain WITHOUT rebuilding: the seam canvas frame tracks natively
-// (autoresizingMask), so live resize must NOT resize retained board targets
-// or rebuild the swapchain per drag frame. On settle the flag clears and
-// exactly one resize + one rebuild converge to the final size.
+// seam at the current window-content backing size on every geometry step.
 bool Window_isLiveResizing(const Window *window);
 
 // --- Chrome capability toggles (style-mask API) ---
@@ -238,7 +246,15 @@ void Window_setNaked(Window *window, bool naked);
 bool Window_isNaked(const Window *window);
 void Window_setBorderless(Window *window, bool borderless);
 bool Window_isBorderless(const Window *window);
-void Window_setFloatingTrafficLights(Window *window, bool floating); // Transparent titlebar, leaves just traffic lights over content
+
+// Viewport flush-to-top chrome control:
+// Flushes the content viewport to the top of the window frame under the top bar (and traffic lights).
+// ONLY applies when the window is in decorated mode (WINDOW_DECORATED). If the window is
+// currently naked (WINDOW_UNDECORATED_NAKED) or borderless/undecorated (WINDOW_UNDECORATED_BORDERLESS),
+// this function is disabled (no-op).
+void Window_setViewportFlushToTop(Window *window, bool flush);
+bool Window_isViewportFlushToTop(const Window *window);
+void Window_setFloatingTrafficLights(Window *window, bool floating); // Transparent titlebar, leaves traffic lights over content (alias for Window_setViewportFlushToTop)
 
 // macOS-only traffic-light chrome (the Window_macOS_ infix IS the platform
 // lock: these symbols exist only in the Cocoa backend; a non-Apple build that
@@ -343,7 +359,7 @@ void Window_workerPresentEnd(void);
 //
 // Stamp an RGBA raster (ColorBuffer layout) into the window's content view,
 // scaled to fit. THREAD CONTRACT: call from thread 0 only — this touches
-// AppKit, and AppKit owns its main thread like a landlord.
+// AppKit, and AppKit owns its _main thread like a landlord.
 typedef struct Buffer Buffer;
 bool Window_present(Window *window, const Buffer *frame);
 
