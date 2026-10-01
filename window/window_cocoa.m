@@ -26,6 +26,7 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
+#import <ImageIO/ImageIO.h>
 #import <stdatomic.h>
 #include <math.h>
 
@@ -2043,6 +2044,42 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
         [CATransaction commit];
         CGImageRelease(img);
     }
+}
+
+// Write a tightly packed RGBA8 buffer to a PNG file. The screenshot/CAPTURE
+// path for tests and agents; ImageIO does the encoding.
+bool Window_writePNG(const void *pixels, size_t stride, int width, int height, const char *path) {
+    if (pixels == nullptr || width <= 0 || height <= 0 || path == nullptr)
+        return false;
+    bool ok = false;
+    @autoreleasepool {
+        CGDataProviderRef provider =
+            CGDataProviderCreateWithData(NULL, pixels, stride * (size_t) height, NULL);
+        if (provider == NULL)
+            return false;
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGImageRef img = CGImageCreate((size_t) width, (size_t) height, 8, 32, stride, cs,
+                                       kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big,
+                                       provider, NULL, false, kCGRenderingIntentDefault);
+        CGColorSpaceRelease(cs);
+        CGDataProviderRelease(provider);
+        if (img == NULL)
+            return false;
+        CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+            NULL, (const UInt8 *) path, (CFIndex) strlen(path), false);
+        if (url != NULL) {
+            CGImageDestinationRef dest =
+                CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+            if (dest != NULL) {
+                CGImageDestinationAddImage(dest, img, NULL);
+                ok = CGImageDestinationFinalize(dest);
+                CFRelease(dest);
+            }
+            CFRelease(url);
+        }
+        CGImageRelease(img);
+    }
+    return ok;
 }
 
 void Window_setClickThrough(Window *window, bool clickThrough) {

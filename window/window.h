@@ -210,6 +210,11 @@ bool Window_isTransparent(const Window *window);
 // referenced, not copied, so it must stay valid until the next present.
 void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int width, int height);
 
+// Screenshot: write a tightly packed RGBA8 buffer (same layout as
+// Window_presentRGBA) to a PNG file. The CAPTURE() path for tests/agents.
+// Apple-only (ImageIO). Returns true on success.
+bool Window_writePNG(const void *pixels, size_t stride, int width, int height, const char *path);
+
 // Monotonic counter bumped by thread 0 whenever presentation policy changes.
 uint64_t Window_renderGeneration(const Window *window);
 
