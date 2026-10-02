@@ -82,7 +82,6 @@
 /**
  * ============================================================================
  * CLASS: Window (window/window_wayland.c)
- * LEVEL: L4 — Self-Management (Wayland OS window shim owned by the OS)
  * ============================================================================
  * SUMMARY:
  *   DRAFT Wayland mirror of the AppKit window backend. One opaque C handle per
@@ -152,11 +151,11 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window_0(void)                        : Window_new(nullptr)
- *   - Window_1(title)                       : Window_new(&{ .title })
+ *   - Window_0(void)                        : _windowNew(nullptr)
+ *   - Window_1(title)                       : _windowNew(&{ .title })
  *   - Window_3(title, width, height)
- *   - Window_new(desc)                      : descResolve + waylandAlloc + show
- *   - Window_create(title, width, height)
+ *   - Window(desc fields via mutate)                      : descResolve + waylandAlloc + show
+ *   - Window(...) chooser in window.h
  *
  * Private Constructors: (.c static)
  *   - waylandAlloc(desc)                    : shared internal constructor
@@ -224,6 +223,7 @@
  *   - Window_setDecorated(window, decorated)
  *   - Window_setNaked(window, naked)
  *   - Window_setBorderless(window, borderless)
+ *   - Window_setViewportFlushToTop(window, flush) : macOS-only no-op
  *   - Window_setFloatingTrafficLights(window, floating) : macOS-only no-op
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible) : macOS-only stub
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y) : macOS-only stub
@@ -262,6 +262,7 @@
  *   - Window_isDecorated(window)
  *   - Window_isNaked(window)
  *   - Window_isBorderless(window)
+ *   - Window_isViewportFlushToTop(window) : macOS-only false
  *   - Window_macOS_isTrafficLightButtonVisible(window, light) : macOS-only stub
  *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY) : macOS-only stub
  *   - Window_isMinimized(window)
@@ -1412,18 +1413,18 @@ static Window *waylandAlloc(const WindowDesc *desc) {
 }
 
 Window *Window_0(void) {
-    return Window_new(nullptr);
+    return _windowNew(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return Window_new(&(WindowDesc){ .title = title });
+    return _windowNew(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-Window *Window_new(const WindowDesc *desc) {
+static Window *_windowNew(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *window = waylandAlloc(&d);
     if (window == nullptr)
@@ -1433,9 +1434,6 @@ Window *Window_new(const WindowDesc *desc) {
     return window;
 }
 
-Window *Window_create(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
-}
 
 // Tear down the surface + handle. Safe regardless of whether the compositor
 // already closed it: object destruction is idempotent here, and every listener
@@ -1481,6 +1479,11 @@ void Window_pollEvents(void) {
     if (gDisplay == nullptr)
         return;
     waylandDrain();
+}
+
+bool Window_pollEventStep(void) {
+    Window_pollEvents();
+    return false; // Wayland's existing batch pump owns its dispatch boundary.
 }
 
 // --- Present policy (pure state; a future render path consumes it) ----------
@@ -1590,6 +1593,64 @@ int Window_width(Window *window) {
 
 int Window_height(Window *window) {
     return window ? atomic_load_explicit(&(*window).cachedHeight, memory_order_relaxed) : 0;
+}
+
+float Window_getScale(const Window *window) {
+    (void) window;
+    return 1.0f;
+}
+
+void Window_revalidate(Window *window) {
+    (void) window;
+}
+
+void Window_setSizePoints(Window *window, float width, float height) {
+    Window_setSize(window, (int) width, (int) height);
+}
+
+void Window_getSizePoints(const Window *window, float *outWidth, float *outHeight) {
+    if (outWidth) *outWidth = (float) Window_width(window);
+    if (outHeight) *outHeight = (float) Window_height(window);
+}
+
+float Window_widthPoints(const Window *window) {
+    return (float) Window_width(window);
+}
+
+float Window_heightPoints(const Window *window) {
+    return (float) Window_height(window);
+}
+
+int Window_viewportWidth(const Window *window) {
+    return Window_width(window);
+}
+
+int Window_viewportHeight(const Window *window) {
+    return Window_height(window);
+}
+
+float Window_viewportWidthPoints(const Window *window) {
+    return (float) Window_width(window);
+}
+
+float Window_viewportHeightPoints(const Window *window) {
+    return (float) Window_height(window);
+}
+
+int Window_windowWidth(const Window *window) {
+    return Window_width(window);
+}
+
+int Window_windowHeight(const Window *window) {
+    return Window_height(window);
+}
+
+float Window_windowWidthPoints(const Window *window) {
+    return (float) Window_width(window);
+}
+
+float Window_windowHeightPoints(const Window *window) {
+    return (float) Window_height(window);
 }
 
 // The compositor owns geometry on Wayland; setSize only nudges the configure
@@ -1742,6 +1803,16 @@ bool Window_isBorderless(const Window *window) {
     if (window == nullptr)
         return false;
     return !(*window).decorated;
+}
+
+void Window_setViewportFlushToTop(Window *window, bool flush) {
+    (void) window;
+    (void) flush;
+}
+
+bool Window_isViewportFlushToTop(const Window *window) {
+    (void) window;
+    return false;
 }
 
 void Window_setFloatingTrafficLights(Window *window, bool floating) {

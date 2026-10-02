@@ -28,7 +28,6 @@
 /**
  * ============================================================================
  * CLASS: TrafficLight (window/traffic_light_cocoa.m)
- * LEVEL: L4 — Self-Management (AppKit OS traffic-light controller)
  * ============================================================================
  * SUMMARY:
  *   Encapsulates macOS traffic-light button chrome layout and positioning.
@@ -47,7 +46,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Constructors:
- *   - TrafficLight_create(nsWindowHandle)
+ *   - TrafficLight(nsWindowHandle)
  *   - TrafficLight_destroy(self)
  *
  * Visibility:
@@ -74,7 +73,7 @@ struct TrafficLight {
     NSRect lightBase[TRAFFIC_LIGHT_COUNT];
 };
 
-TrafficLight *TrafficLight_create(void *nsWindowHandle) {
+TrafficLight *TrafficLight_1(void *nsWindowHandle) {
     TrafficLight *self = (TrafficLight*) calloc(1, sizeof(TrafficLight));
     if (self == nullptr)
         return nullptr;

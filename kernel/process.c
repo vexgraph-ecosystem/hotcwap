@@ -27,7 +27,6 @@
 /**
  * ============================================================================
  * CLASS: Process (kernel/process.c)
- * LEVEL: L2 — Behavior (one replaceable caller-thread entry)
  * ============================================================================
  * SUMMARY:
  *   One caller-thread invocation at a time. Name, context, and hot association

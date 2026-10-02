@@ -60,7 +60,6 @@
 /**
  * ============================================================================
  * CLASS: Permission (permission/objc/permission_cocoa.m)
- * LEVEL: L4 — Self-Management (R1 host OS-consent backend)
  * ============================================================================
  * macOS implementation of the permission backend hooks.
  *

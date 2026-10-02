@@ -26,7 +26,6 @@
 /**
  * ============================================================================
  * CLASS: HotTrampolineTable (hot/hot_trampoline.c)
- * LEVEL: L4 — Self-Management (per-instance swap machinery the loader stands on)
  * ============================================================================
  * SUMMARY:
  *   One atomic function-pointer table per HotModule instance. Two loaders

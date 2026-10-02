@@ -32,7 +32,6 @@
 /**
  * ============================================================================
  * CLASS: Console (kernel/console.c)
- * LEVEL: L2 — Behavior (session state machine; execution borrowed from R2)
  * ============================================================================
  * SUMMARY:
  *   Session state machine for shell scripts and REPL-style interactions. Owns

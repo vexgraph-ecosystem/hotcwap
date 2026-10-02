@@ -29,7 +29,6 @@
 /**
  * ============================================================================
  * CLASS: WindowEvent (window/window_event.c)
- * LEVEL: L2 — Behavior (per-window OS lifecycle event registry)
  * ============================================================================
  * SUMMARY:
  *   The fn-pointer lifecycle contract for ONE window. Embedded in the window's

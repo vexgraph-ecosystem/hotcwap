@@ -21,7 +21,7 @@
  * ChunkedList storage conforming to the Emergency Teardown Law, guaranteeing
  * windows and OS handles are cleanly destroyed before fatal process termination.
  *
- * Implements THROW for fail-closed fatal error termination with formatted
+ * Implements FATAL_THROW for fail-closed fatal error termination with formatted
  * diagnostic output and LIFO teardown execution, alongside TRY for non-fatal
  * diagnostic warnings and graceful execution recovery.
  * ============================================================================
@@ -31,12 +31,11 @@
 /**
  * ============================================================================
  * MODULE: Throwable (hot/throwable.c)
- * LEVEL: L1 — Core Subsystem (panic diagnostics and emergency teardown)
  * ============================================================================
  * SUMMARY:
  *   Process-level panic, exception reporting, and emergency teardown registry.
  *   Provides LIFO teardown dispatch across arbitrary registered destruction hooks
- *   (including Window_destroyAll) prior to process exit on THROW assertions.
+ *   (including Window_destroyAll) prior to process exit on FATAL_THROW assertions.
  *
  * STRUCT FIELDS:
  * ----------------------------------------------------------------------------
@@ -100,7 +99,7 @@ void Throwable_registerTeardown(ThrowableTeardownFn fn) {
     if (fn == NULL) return;
 
     if (s_teardownList == NULL) {
-        s_teardownList = ChunkedList_3(ID_BIT64, sizeof(ThrowableTeardownFn), VEX_CHUNKED_BYTES_DEFAULT);
+        s_teardownList = ChunkedList(ID_BIT64, sizeof(ThrowableTeardownFn), VEX_CHUNKED_BYTES_DEFAULT);
         if (s_teardownList == NULL) return;
     }
 

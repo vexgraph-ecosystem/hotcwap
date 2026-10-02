@@ -29,7 +29,6 @@
 /**
  * ============================================================================
  * MODULE: Hot_behavior (hot/hot_behavior.c)
- * LEVEL: L3 — Module Code (reloaded dylib pulse/bar business logic)
  * ============================================================================
  * SUMMARY:
  *   Phase-2 L2/L3 behavior subject: pure pulse/bar math + texture path.

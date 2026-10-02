@@ -124,8 +124,8 @@
  *   - Window_0(void)
  *   - Window_1(title)
  *   - Window_3(title, width, height)
- *   - Window_new(desc)
- *   - Window_create(title, width, height)
+ *   - Window(desc fields via mutate)
+ *   - Window(...) chooser in window.h
  *
  * Private Constructors: (.c static)
  *   - windowAlloc(desc)               : shared constructor core
@@ -1256,7 +1256,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         (*w).cursorType = WINDOW_CURSOR_DEFAULT;
         // Traffic-light chrome controller (all three lights visible by default).
         // Created against the NSWindow; nullptr only if calloc fails.
-        (*w).trafficLights = TrafficLight_create((__bridge void*) window);
+        (*w).trafficLights = TrafficLight((__bridge void*) window);
         (*w).resizeRenderFn = nullptr;
         (*w).resizeRenderUserdata = nullptr;
         (*w).id = windowIdAcquire(window, w);
@@ -1294,19 +1294,21 @@ static WindowDesc descResolve(const WindowDesc *desc) {
 
 // --- Constructors -----------------------------------------------------------
 
+static Window *_windowNew(const WindowDesc *desc);
+
 Window *Window_0(void) {
-    return Window_new(nullptr);
+    return _windowNew(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return Window_new(&(WindowDesc){ .title = title });
+    return _windowNew(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-Window *Window_new(const WindowDesc *desc) {
+static Window *_windowNew(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *w = windowAlloc(&d);
     if (w == nullptr)
@@ -1320,9 +1322,6 @@ Window *Window_new(const WindowDesc *desc) {
     return w;
 }
 
-Window *Window_create(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
-}
 
 // Tear down the window and free the handle. Safe to call whether the user
 // already closed the window or not: if it's still open we close it, and we

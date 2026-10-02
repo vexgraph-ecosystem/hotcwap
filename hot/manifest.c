@@ -1,4 +1,5 @@
 #include "hot/manifest.h"
+#include "hot/ledger.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -47,7 +48,6 @@
 /**
  * ============================================================================
  * CLASS: ManifestPath (hot/manifest.c)
- * LEVEL: L4 — Self-Management (owns the per-app install layout on disk)
  * ============================================================================
  * SUMMARY:
  *   The MANIFEST(...) install-layout authority — the "manifest binary way".
@@ -84,7 +84,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - ManifestPath_0(dest, cap)               : Bind builder to buffer
+ *   - ManifestPath_2(dest, cap)               : Bind builder to buffer
  *   - Manifest_init(first, ...)               : ONE-TIME initializer (MANIFEST macro)
  *   - Manifest_uninstall(first, ...)          : Complete uninstall (UNINSTALL macro)
  *
@@ -210,6 +210,71 @@ static bool file_exists(const char *path) {
     struct stat st;
     memset(&st, 0, sizeof(st));
     return stat(path, &st) == 0 && S_ISREG((unsigned int) st.st_mode);
+}
+
+// Extract the first double-quoted string value for a JSON key, tolerant of
+// whitespace around the colon. Bounded; the ownership guard only.
+static bool catalog_field(const char *buf, const char *key, char *out, size_t cap) {
+    size_t klen = strlen(key);
+    const char *p = buf;
+    while ((p = strchr(p, '"')) != nullptr) {
+        if (strncmp(p + 1, key, klen) == 0 && p[1 + klen] == '"') {
+            const char *q = strchr(p + 2 + klen, ':');
+            if (q == nullptr)
+                return false;
+            q++;
+            while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r')
+                q++;
+            if (*q != '"')
+                return false;
+            q++;
+            size_t n = 0;
+            while (*q != '\0' && *q != '"' && n + 1 < cap)
+                out[n++] = *q++;
+            out[n] = '\0';
+            return true;
+        }
+        p++;
+    }
+    return false;
+}
+
+// Destructive-target guard — the SAME rule gates MANIFEST() creation and
+// UNINSTALL() deletion, so what cannot be created cannot be destroyed. A root
+// is acceptable only when it is not a protected location (the filesystem root
+// or HOME itself) and, if it already exists, is a manifest tree that declares
+// THIS application — its own manifest.json with matching name AND org. That
+// marker is written at mount and lives for the install's life; a stray or
+// foreign manifest.json does not make a directory ours. The manifest never
+// adopts a directory it did not create (~/Documents, /System, ...).
+static bool manifest_root_guard(const char *root) {
+    if (root == nullptr || *root == '\0')
+        return false;
+    const char *homeEnv = getenv("HOME");
+    if (strcmp(root, "/") == 0)
+        return false;
+    if (homeEnv && *homeEnv != '\0' && strcmp(root, homeEnv) == 0)
+        return false;
+    if (!dir_exists(root))
+        return true;   // fresh: we are about to create it
+
+    char catalog[MANIFEST_BUF_CAP];
+    snprintf(catalog, sizeof(catalog), "%s/" MANIFEST_JSON, root);
+    FILE *f = fopen(catalog, "rb");
+    if (f == nullptr)
+        return false;
+    char buf[MANIFEST_JSON_CAP];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+
+    char name[HOT_MANIFEST_MAX_NAME];
+    char org[HOT_MANIFEST_MAX_NAME];
+    if (!catalog_field(buf, "name", name, sizeof(name)))
+        return false;
+    if (!catalog_field(buf, "org", org, sizeof(org)))
+        return false;
+    return strcmp(name, g_name) == 0 && strcmp(org, g_org) == 0;
 }
 
 // Read a base-10 generation stamp. Returns 0 when the file is missing or
@@ -848,7 +913,7 @@ static bool stage_has_content(const char *dir) {
 
 // --- constructors ------------------------------------------------------------
 
-ManifestPath ManifestPath_0(char *dest, size_t cap) {
+ManifestPath ManifestPath_2(char *dest, size_t cap) {
     ManifestPath self;
     self.buf = dest;
     self.cap = cap;
@@ -894,12 +959,14 @@ bool Manifest_init(const char *first, ...) {
     if (segCount < 2)
         return false;
 
-    ManifestPath path = ManifestPath_0(g_root, sizeof(g_root));
+    // Resolve the path WITHOUT creating it, so the guard below can inspect the
+    // real pre-existing state of the target directory.
+    ManifestPath path = ManifestPath(g_root, sizeof(g_root));
     if (!ManifestPath_begin(&path, segments[0]))
         return false;
 
     for (uint32_t i = 1; i < segCount; i++) {
-        if (!ManifestPath_push(&path, segments[i], true))
+        if (!ManifestPath_push(&path, segments[i], false))
             return false;
     }
 
@@ -913,6 +980,27 @@ bool Manifest_init(const char *first, ...) {
     g_segmentCount = segCount;
     for (uint32_t i = 0; i < segCount; i++)
         snprintf(g_segments[i], sizeof(g_segments[i]), "%s", segments[i]);
+
+    // Shared destructive-target guard (the SAME rule as UNINSTALL): never own a
+    // protected location, and never adopt a pre-existing directory that is not
+    // already a manifest tree. Checked BEFORE any directory is created, so the
+    // manifest can never own ~/Documents, /System, or another valuable dir.
+    if (!manifest_root_guard(g_root)) {
+        fprintf(stderr, "hot: MANIFEST refused — '%s' is a protected or non-manifest location\n", g_root);
+        g_mounted = false;
+        g_segmentCount = 0;
+        g_root[0] = '\0';
+        return false;
+    }
+
+    // Guard passed — create the tree now.
+    path = ManifestPath(g_root, sizeof(g_root));
+    if (!ManifestPath_begin(&path, segments[0]))
+        return false;
+    for (uint32_t i = 1; i < segCount; i++) {
+        if (!ManifestPath_push(&path, segments[i], true))
+            return false;
+    }
 
     g_mounted = true;
     g_libraryCount = 0;
@@ -975,7 +1063,23 @@ bool Manifest_uninstall(const char *first, ...) {
         }
     }
 
+    // Shared destructive-target guard: UNINSTALL refuses exactly what MANIFEST()
+    // would refuse to create (a protected location, or a directory that is no
+    // longer a manifest tree). The two verbs share one rule.
+    if (!manifest_root_guard(g_root)) {
+        fprintf(stderr, "hot: UNINSTALL refused — '%s' is a protected or non-manifest location\n", g_root);
+        return false;
+    }
+
     remove_ladder_dir(g_root);
+
+    // The machine remembers: the tree is gone but the record stays, so a later
+    // run is not a fresh install.
+    Ledger *ledger = Ledger_open(g_org, g_name);
+    if (ledger != nullptr) {
+        Ledger_markUninstalled(ledger);
+        Ledger_free(ledger);
+    }
 
     g_mounted = false;
     g_root[0] = '\0';
@@ -1121,6 +1225,14 @@ bool MANIFEST_REFLECT(const char *library, const char *sourceDir) {
         return false;
     fputs("vexgraph install reflection\n", f);
     fclose(f);
+
+    // The install moment: record it in the machine-scoped ledger (out of tree,
+    // survives UNINSTALL).
+    Ledger *ledger = Ledger_open(g_org, g_name);
+    if (ledger != nullptr) {
+        Ledger_recordInstall(ledger, g_version);
+        Ledger_free(ledger);
+    }
     return true;
 }
 
@@ -1212,6 +1324,17 @@ bool MANIFEST_PROMOTE(void) {
 bool MANIFEST_IS_FIRST_RUN(void) {
     if (!g_mounted)
         return true; // fail-closed: no mounted manifest means never installed
+
+    // The machine-scoped ledger outlives the tree: if this app was ever
+    // installed here, a wiped tree is NOT a fresh install.
+    Ledger *ledger = Ledger_open(g_org, g_name);
+    if (ledger != nullptr) {
+        bool known = Ledger_hasRecord(ledger);
+        Ledger_free(ledger);
+        if (known)
+            return false;
+    }
+
     char current[MANIFEST_BUF_CAP];
     char markDir[MANIFEST_BUF_CAP];
     if (!ManifestPath_ladderDir(MANIFEST_LADDER_CURRENT, current,

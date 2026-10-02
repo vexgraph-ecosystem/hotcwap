@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include "exception/exception.h"
 
-// Teardown hook invoked when THROW terminates the process.
+// Teardown hook invoked when FATAL_THROW terminates the process.
 typedef void (*ThrowableTeardownFn)(void);
 
 // Register a teardown callback (e.g. Window_destroyAll) to execute before exit.
@@ -37,11 +37,11 @@ bool Throwable_tryCatch(bool condition,
                         const char *details_fmt,
                         ...);
 
-// THROW macro: terminates immediately with full Java-style diagnostics and emergency teardown.
-#define THROW(msg, site, ...) \
+// Fatal termination; distinct from vexspoke's recoverable THROW.
+#define FATAL_THROW(msg, site, ...) \
     Throwable_throw(EXCEPTION_RUNTIME, (site), __FILE__, __LINE__, (msg), "" __VA_OPT__(__VA_ARGS__))
 
-#define THROW_EX(category, msg, site, ...) \
+#define FATAL_THROW_EX(category, msg, site, ...) \
     Throwable_throw((category), (site), __FILE__, __LINE__, (msg), "" __VA_OPT__(__VA_ARGS__))
 
 // TRY macro: tests expression condition; on failure logs caught exception and returns false.

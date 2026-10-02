@@ -31,7 +31,7 @@
 //
 // The window/AppKit side is owned by the OS, not the engine. When a dylib
 // is reloaded, the NSWindow/NSView/CAMetalLayer persist — only the Vulkan
-// swapchain and GPU objects are recreated.
+// offscreen GPU objects and Metal drawable resources are recreated.
 //
 // Hot_poll() runs on main thread only; the state-save worker is this class's
 // one supervised thread (joined bounded per the Bounded Wait Law).

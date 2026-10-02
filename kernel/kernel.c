@@ -43,7 +43,6 @@
 /**
  * ============================================================================
  * CLASS: Kernel (kernel/kernel.c)
- * LEVEL: L4 — Self-Management (R1 Host; the Vertical Integration Law vs the Four System Levels Law: L = edit-risk, R = supervision)
  * ============================================================================
  * SUMMARY:
  *   R1 Host Supervisor: STORAGE + DISPATCH, never an executor. Owns the master
@@ -203,7 +202,7 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     if (!self)
         return NULL;
     // Create the Lifetime memory substrate directly via vexspoke's MemoryArena.
-    Lifetime lt = Lifetime_create(arenaBytes, transientBytes);
+    Lifetime lt = Lifetime(arenaBytes, transientBytes);
     if (!Lifetime_isValid(&lt)) {
         Lifetime_destroy(&lt);
         free(self);
@@ -733,16 +732,18 @@ static bool kernelGfxAppContinues(void *context) {
     return !Application_isFinished(a);
 }
 
-// Thread-0 pump handed to graphvex's frame loop. Window_pollEvents only
-// MIRRORS the OS queue into vexspoke's input rings — dispatching those rings
+// Thread-0 pump handed to graphvex's frame loop. A single native event is
+// mirrored into vexspoke's input rings — dispatching those rings
 // to registered listeners (the widget bridge) is a separate step. Without
 // this pass, a window that pumps events still never delivers a single click
-// or keystroke to any listener. hotcwap owns the pump (the Window Decoupling
-// Law); vexspoke owns the ring and its dispatch (R2).
-static void kernelGfxPump(void) {
-    Window_pollEvents();
+// or keystroke to any listener. Returning "more queued" lets the graphics loop
+// paint the current scroll position before accepting another event. hotcwap
+// owns the pump (the Window Decoupling Law); vexspoke owns ring dispatch (R2).
+static bool kernelGfxPump(void) {
+    bool queued = Window_pollEventStep();
     Key_dispatchEvents();
     Mouse_dispatchEvents();
+    return queued;
 }
 
 int Kernel_runApplication(Kernel *self, Application *a) {
@@ -948,14 +949,14 @@ uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t 
 }
 
 ;;SETTER
-void Kernel_setGfxAppRunner(Kernel *self, int (*fn)(void *context, bool (*continueFn)(void *), void (*pollFn)(void))) {
+void Kernel_setGfxAppRunner(Kernel *self, int (*fn)(void *context, bool (*continueFn)(void *), bool (*pollFn)(void))) {
     if (!self)
         return;
     (*self).gfxAppRun = fn;
 }
 
 ;;GETTER
-int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continueFn)(void *), void (*pollFn)(void)) {
+int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continueFn)(void *), bool (*pollFn)(void)) {
     if (!self)
         return nullptr;
     return (*self).gfxAppRun;

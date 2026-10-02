@@ -40,7 +40,6 @@
 /**
  * ============================================================================
  * CLASS: HotModule (hot/hot.c)
- * LEVEL: L4 — Self-Management (watches the manifest ladder, verifies, swaps, retires)
  * ============================================================================
  * SUMMARY:
  *   The manifest-driven hotloader. A HotModule binds ONE library key of the

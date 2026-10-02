@@ -1,15 +1,15 @@
 # hotcwap — Repo-Local Living Preferences
-> Exclusive repository-level preferences (the Living Preferences Law).
+> Repo-local preferences governed by the Living Documentation Law.
 > Universal Supreme Constitution: preferences.md (vexspoke).
-
-;;SYNC("mirrors ecosystem/vexspoke/preferences.md @ 2026.09-universal")
 
 ## 0. Constitution Link (supreme)
 - [preferences.md](https://github.com/vexgraph-dev/vexspoke/blob/main/preferences.md) (canonical, vexspoke) — accessible locally at ../../preferences.md
 - All universal laws in `preferences.md` are mandatory and binding across the ecosystem.
 - This document codifies **exclusive** preferences that apply uniquely to `hotcwap` (R1 Kernel Host).
 
-## 1. Exclusive Preferences Binding Matrix
+## 1. Repo-Local Law Index (Binding Matrix)
+
+Universal laws are inherited from the canonical `preferences.md` Index; this table indexes the additional laws specific to this repository.
 
 | Law Title | Scope | Enforcement |
 | :--- | :--- | :--- |
@@ -28,41 +28,33 @@ canvas (`CAMetalLayer`) — beneath an optional transparent `NSVisualEffectView`
 blur substrate. All Vulkan-rendered boards (scene backdrop, content UI) are
 retained OFFSCREEN targets composited into the seam image by the render repo
 (the Window Compositing Layer Order Law + the Single-Seam Canvas Law); no
-per-scene or per-widget `CALayer`, no IOSurface-backed UI surfaces, no
-per-pane swapchains exist anywhere in the tree.
+per-scene or per-widget `CALayer` and no Vulkan window presentation path.
 
 #### The Why:
-A single on-screen surface removes swapchain contention between independent
-layers (they no longer exist), keeps one frame cadence for the whole window,
-and makes live resize a pure top-left-crop of a fixed monitor-sized seam
-buffer (the canvas frame tracks via `autoresizingMask` + the Native Pixel
-Law drawableSize contract) — zero per-drag rebuilds, zero catch-up.
+A single on-screen Metal layer keeps one frame cadence for the whole window.
+Its drawable size follows the live window-content backing size, not a fixed
+monitor-sized buffer. Board rectangles are resolved against that size.
 
 #### The Rule:
-1. **Bottom Layer:** window blur substrate + the Vulkan swapchain surface
-   (the seam canvas); no UI widgets render direct-to-chain, and nothing else
-   is ever parented below it.
+1. **Bottom Layer:** window blur substrate; no UI widget owns a display layer.
 2. **Top Layer:** the one seam `CAMetalLayer` (`geometryFlipped = YES`,
-   TopLeft-pinned, `presentsWithTransaction = YES`); it is the only on-screen
-   Metal layer in the window. The opaque `bottomLayer`/`topLayer` window
-   slots are retained board handles — PARENTING ONLY, never dereferenced by
-   hotcwap, never on-screen CALayers after the pane-era retirement; render
-   repos composite boards into the seam instead.
+   TopLeft-pinned, native-pixel `drawableSize`); it is the only on-screen
+   Metal layer in the window. The renderer composites retained board targets
+   into its drawable; hotcwap continues to own window and event routing.
 
 ---
 
 ### Continuous Real-Time Live Resize & Presentation Law (Abolishing "Freeze-Exact")
 
-Freezing swapchain extents, dropping `VK_ERROR_OUT_OF_DATE_KHR` frames, and
-early-returning from layout during mouse drags (`Window_isLiveResizing`) is
+Freezing the canvas extent and early-returning from layout during mouse drags (`Window_isLiveResizing`) is
 **strictly abolished**. Deferring work to "settle" is an artificial cop-out
 that produces frozen windows, dead animations, and visual tearing. During an
 active window drag or live resize, the rendering pipeline operates
 continuously:
 
-1. **Dynamic Extent & Swapchain:** `CAMetalLayer.drawableSize` tracks live
-   window bounds on every resize event. Swapchain out-of-date events
-   immediately rebuild the swapchain cleanly without dropping frames.
+1. **Dynamic Extent:** `CAMetalLayer.drawableSize` tracks the live
+   window-content backing bounds on every resize event; retained GPU targets
+   are resized without creating a Vulkan presentation object.
 2. **Live Layout Recalculation = Real-Time Anchor Feel:** Container layout and
    anchor resolution run on live bounds every frame of the drag — pinned
    elements (e.g., right-anchored, bottom-anchored) recalculate their offsets
@@ -76,7 +68,7 @@ continuously:
    bitmap — never black, never torn, never stretched-out-of-anchor.
 3. **Unbroken Animation & Presentation:** Animation tickers,
    dirty-propagation, and command buffer presentation
-   (`presentsWithTransaction = YES`) continue rendering and presenting at the
+    continue rendering and presenting at the
    display's native refresh rate (60/120Hz) throughout mouse drags and moves.
 
 ---
@@ -89,7 +81,7 @@ then rests on its last composite — the compositor never re-presents clean
 content and never re-invokes a scene's render handler.
 
 #### The Why (subsumes the former No Double-Render Law)
-The old law forbade stamping one panel into two chains. Present-on-demand
+The old law forbade stamping one panel into two display targets. Present-on-demand
 makes that impossible by construction: a scene RENDER (its world into its
 retained offscreen target — `VkLayer`, own thread, own FPS) is distinct from
 a COMPOSITE (sample published targets + paint the UI tree into the canvas at
@@ -102,8 +94,7 @@ forbidden.
   (offscreen images + acquire/render semaphores + fences) on its own
   timeline; the canvas samples the latest published frame at the anchor rect,
   in tree z-order interleaved with UI. One canvas total — no per-scene
-  surfaces and no DIRECT mode: the pane-era `CAMetalLayer` + `VkPane`
-  per-scene swapchain is retired (the Single-Seam Canvas Law).
+   surfaces and no DIRECT mode (the Single-Seam Canvas Law).
 
 #### Composite rules:
 - The presenter wakes only on demand: a dirty tree, a published layer frame,
@@ -138,6 +129,6 @@ Live reloading without ABI validation causes memory misalignment and crashes whe
 
 ---
 
-## 4. Readiness Cross-Reference (the Living Feature Readiness Law)
+## 4. Readiness Cross-Reference (Living Documentation Law)
 
 - Feature readiness matrix tracked in [`../../_repositories/.ecosystem/hotcwap.md`](../../_repositories/.ecosystem/hotcwap.md) (rendered as `[[hotcwap]]` wiki page).

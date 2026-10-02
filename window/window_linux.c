@@ -41,7 +41,6 @@
 /**
  * ============================================================================
  * MODULE: Window_linux (window/window_linux.c)
- * LEVEL: L4 — Self-Management (Linux/X11 OS window backend)
  * ============================================================================
  * SUMMARY:
  *   Linux/X11 backend stub for the Window API.
@@ -58,7 +57,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window_create(title, width, height)
+ *   - Window() / Window(title) / Window(title, width, height)  (chooser in window.h)
  *
  * Private Constructors: (.c static)
  *   - (none)
@@ -128,13 +127,6 @@
 ;;INTENTION("Fills the Window API seam (window.h) on Linux so the engine can be built there; mirrors the legacy linuxWindow.java.")
 ;;DRAFT
 
-;;;;INCOMPLETE // XCreateSimpleWindow; returns nullptr until implemented.
-Window *Window_create(const char *title, int width, int height) {
-    (void) title;
-    (void) width;
-    (void) height;
-    return nullptr;
-}
 
 ;;INCOMPLETE // XDestroyWindow; no-op until implemented.
 void Window_destroy(Window *window) {
@@ -154,6 +146,11 @@ void Window_setShouldClose(Window *window, bool shouldClose) {
 
 ;;INCOMPLETE // XPending/XNextEvent loop; no-op until implemented.
 void Window_pollEvents(void) {
+}
+
+bool Window_pollEventStep(void) {
+    Window_pollEvents();
+    return false;
 }
 
 ;;INCOMPLETE // SwapBuffers vsync; no-op until implemented.
@@ -326,6 +323,20 @@ void Window_setBorderless(Window *window, bool borderless) {
 bool Window_isBorderless(const Window *window) {
     (void) window;
     return false;
+}
+
+void Window_setViewportFlushToTop(Window *window, bool flush) {
+    (void) window;
+    (void) flush;
+}
+
+bool Window_isViewportFlushToTop(const Window *window) {
+    (void) window;
+    return false;
+}
+
+void Window_setFloatingTrafficLights(Window *window, bool floating) {
+    Window_setViewportFlushToTop(window, floating);
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on X11: needs a Mac to mean anything.

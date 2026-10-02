@@ -73,13 +73,17 @@ typedef struct WindowDesc {
 //   Window()                     -> defaults, hidden
 //   Window("title")              -> titled, hidden
 //   Window("title", 800, 600)    -> legacy create, hidden
-//   Window_new(&(WindowDesc){…}) -> every other field (x/y/centered/shown)
+//   Window("title", 800, 600)    -> legacy create, hidden
 //
 // All variants construct HIDDEN: construct -> mutate -> Window_show().
 // Placement defaults to centered on the _main screen's visible frame (like an
 // application should be); pass .x/.y in WindowDesc for a custom placement.
 // The macro is function-like, so it never fires when `Window` is used as the
-// type name — only at call sites with parentheses.
+// type name — only at call sites with parentheses. The declared Window_0/1/3
+// functions are the macro's dispatch targets (declaration/implementation
+// only): every call site uses Window(...), per the Semantic Consistency Law
+// (Construction and arity). A full field-by-field description is applied by
+// constructing then mutating (Window_center/Window_setSize/Window_show).
 
 Window *Window_0(void);
 Window *Window_1(const char *title);
@@ -91,14 +95,6 @@ Window *Window_3(const char *title, int width, int height);
     dummy __VA_OPT__(,) __VA_ARGS__, \
     Window_3, Window_2, Window_1, Window_0 \
 )(__VA_ARGS__)
-
-// Parameterized constructor: Desc fields applied on top of defaults.
-// Pass &(WindowDesc){ .title = "...", .centered = true } — unset fields keep
-// their defaults. Returns nullptr on failure.
-Window *Window_new(const WindowDesc *desc);
-
-// Legacy-style convenience constructor: titled, sized, created hidden.
-Window *Window_create(const char *title, int width, int height);
 
 // Close the window and free the handle. Safe if already closed.
 void Window_destroy(Window *window);

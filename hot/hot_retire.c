@@ -27,7 +27,6 @@
 /**
  * ============================================================================
  * CLASS: HotRetireRing (hot/hot_retire.c)
- * LEVEL: L4 — Self-Management (per-instance grace-period close the loader stands on)
  * ============================================================================
  * SUMMARY:
  *   One generational dlclose ring per HotModule instance. Old dylibs park

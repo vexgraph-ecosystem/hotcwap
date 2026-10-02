@@ -41,7 +41,6 @@
 /**
  * ============================================================================
  * CLASS: Application (kernel/application.c)
- * LEVEL: L2 — Behavior (executable identity, window registry & hot-module slot)
  * ============================================================================
  * SUMMARY:
  *   The manifest for a running executable: name, author, version, icon, and the

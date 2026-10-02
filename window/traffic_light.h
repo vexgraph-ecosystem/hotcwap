@@ -2,6 +2,7 @@
 #define WINDOW_TRAFFIC_LIGHT_H
 
 #include <stdbool.h>
+#include "c23/constructor.h"
 
 // window/traffic_light.h — macOS traffic-light chrome management.
 //
@@ -19,7 +20,8 @@ typedef enum TrafficLightButton {
 typedef struct TrafficLight TrafficLight;
 
 // --- Constructors ---
-TrafficLight *TrafficLight_create(void *nsWindowHandle);
+TrafficLight *TrafficLight_1(void *nsWindowHandle);
+#define TrafficLight(...) CONSTRUCTOR_DISPATCH(TrafficLight, __VA_ARGS__)
 void TrafficLight_destroy(TrafficLight *self);
 
 // --- Visibility ---

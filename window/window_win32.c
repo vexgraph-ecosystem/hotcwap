@@ -88,7 +88,6 @@
 /**
  * ============================================================================
  * CLASS: Window (window/window_win32.c)
- * LEVEL: L4 — Self-Management (Win32 OS window shim owned by the OS)
  * ============================================================================
  * SUMMARY:
  *   DRAFT Win32 mirror of the AppKit window backend. One opaque C handle per
@@ -151,11 +150,11 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window_0(void)                        : Window_new(nullptr)
- *   - Window_1(title)                       : Window_new(&{ .title })
+ *   - Window_0(void)                        : _windowNew(nullptr)
+ *   - Window_1(title)                       : _windowNew(&{ .title })
  *   - Window_3(title, width, height)
- *   - Window_new(desc)                      : descResolve + windowAlloc + show
- *   - Window_create(title, width, height)
+ *   - Window(desc fields via mutate)                      : descResolve + windowAlloc + show
+ *   - Window(...) chooser in window.h
  *
  * Private Constructors: (.c static)
  *   - windowAlloc(desc)                     : shared constructor implementation
@@ -223,6 +222,7 @@
  *   - Window_setDecorated(window, decorated)
  *   - Window_setNaked(window, naked)
  *   - Window_setBorderless(window, borderless)
+ *   - Window_setViewportFlushToTop(window, flush)       : macOS-only no-op
  *   - Window_setFloatingTrafficLights(window, floating) : macOS-only no-op
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)  : macOS-only stub
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)          : macOS-only stub
@@ -261,6 +261,7 @@
  *   - Window_isDecorated(window)
  *   - Window_isNaked(window)
  *   - Window_isBorderless(window)
+ *   - Window_isViewportFlushToTop(window)             : macOS-only false
  *   - Window_macOS_isTrafficLightButtonVisible(window, light)  : macOS-only stub
  *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY) : macOS-only stub
  *   - Window_isMinimized(window)
@@ -942,6 +943,16 @@ void Window_pollEvents(void) {
     pumpReflection();
 }
 
+bool Window_pollEventStep(void) {
+    MSG msg;
+    if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    pumpReflection();
+    return PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE) != 0;
+}
+
 // Traffic-light indices (kept beside the constructors for symmetry with the
 // Cocoa backend even though Win32 owns no lights).
 enum { LIGHT_CLOSE = 0, LIGHT_MINI = 1, LIGHT_ZOOM = 2 };
@@ -1154,19 +1165,21 @@ static WindowDesc descResolve(const WindowDesc *desc) {
 
 // --- Constructors -----------------------------------------------------------
 
+static Window *_windowNew(const WindowDesc *desc);
+
 Window *Window_0(void) {
-    return Window_new(nullptr);
+    return _windowNew(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return Window_new(&(WindowDesc){ .title = title });
+    return _windowNew(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-Window *Window_new(const WindowDesc *desc) {
+static Window *_windowNew(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *w = windowAlloc(&d);
     if (w == nullptr)
@@ -1176,9 +1189,6 @@ Window *Window_new(const WindowDesc *desc) {
     return w;
 }
 
-Window *Window_create(const char *title, int width, int height) {
-    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
-}
 
 // Tear down the window and free the handle. Safe to call whether the user
 // already closed the window or not: if it's still open we close it. The
@@ -1351,6 +1361,64 @@ int Window_height(Window *window) {
     if (window == nullptr)
         return 0;
     return atomic_load_explicit(&(*window).cachedHeight, memory_order_relaxed);
+}
+
+float Window_getScale(const Window *window) {
+    (void) window;
+    return 1.0f;
+}
+
+void Window_revalidate(Window *window) {
+    (void) window;
+}
+
+void Window_setSizePoints(Window *window, float width, float height) {
+    Window_setSize(window, (int) width, (int) height);
+}
+
+void Window_getSizePoints(const Window *window, float *outWidth, float *outHeight) {
+    if (outWidth) *outWidth = (float) Window_width((Window*) window);
+    if (outHeight) *outHeight = (float) Window_height((Window*) window);
+}
+
+float Window_widthPoints(const Window *window) {
+    return (float) Window_width((Window*) window);
+}
+
+float Window_heightPoints(const Window *window) {
+    return (float) Window_height((Window*) window);
+}
+
+int Window_viewportWidth(const Window *window) {
+    return Window_width((Window*) window);
+}
+
+int Window_viewportHeight(const Window *window) {
+    return Window_height((Window*) window);
+}
+
+float Window_viewportWidthPoints(const Window *window) {
+    return (float) Window_width((Window*) window);
+}
+
+float Window_viewportHeightPoints(const Window *window) {
+    return (float) Window_height((Window*) window);
+}
+
+int Window_windowWidth(const Window *window) {
+    return Window_width((Window*) window);
+}
+
+int Window_windowHeight(const Window *window) {
+    return Window_height((Window*) window);
+}
+
+float Window_windowWidthPoints(const Window *window) {
+    return (float) Window_width((Window*) window);
+}
+
+float Window_windowHeightPoints(const Window *window) {
+    return (float) Window_height((Window*) window);
 }
 
 void Window_setSize(Window *window, int width, int height) {
@@ -1532,13 +1600,21 @@ bool Window_isBorderless(const Window *window) {
     return (*window).decorated == WINDOW_UNDECORATED_BORDERLESS;
 }
 
-void Window_setFloatingTrafficLights(Window *window, bool floating) {
-    // ;;INTENTION("Floating traffic lights are an AppKit chrome concept; the
-    // NAKED mode (WS_POPUP|WS_THICKFRAME) is the closest Win32 dialect and is
-    // selected through Window_setUndecorated. Stored-and-inert for symbol
-    // parity.")
+void Window_setViewportFlushToTop(Window *window, bool flush) {
+    if (window == nullptr)
+        return;
+    if ((*window).decorated != WINDOW_DECORATED)
+        return;
+    (void) flush;
+}
+
+bool Window_isViewportFlushToTop(const Window *window) {
     (void) window;
-    (void) floating;
+    return false;
+}
+
+void Window_setFloatingTrafficLights(Window *window, bool floating) {
+    Window_setViewportFlushToTop(window, floating);
 }
 
 static int lightIndex(WindowTrafficLight light) {

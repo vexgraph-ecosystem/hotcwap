@@ -25,7 +25,6 @@
 /**
  * ============================================================================
  * CLASS: Permission (permission/permission.c)
- * LEVEL: L4 — Self-Management (R1 host OS-consent surface)
  * ============================================================================
  * OS capability permission requests. Cross-platform contract: the kind exists
  * everywhere, the status is UNSUPPORTED where the host has no concept.

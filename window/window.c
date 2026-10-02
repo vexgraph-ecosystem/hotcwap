@@ -42,7 +42,6 @@
 /**
  * ============================================================================
  * CLASS: Window (window/window.c)
- * LEVEL: L4 — Self-Management (OS window backend persisting across swaps)
  * ============================================================================
  * SUMMARY:
  *   Win32 stub backend for the platform-agnostic Window API.
@@ -62,8 +61,7 @@
  *   - Window_0(void)
  *   - Window_1(title)
  *   - Window_3(title, width, height)
- *   - Window_new(desc)
- *   - Window_create(title, width, height)
+  *   - Window() / Window(title) / Window(title, width, height)  (chooser in window.h)
  *
  * Private Constructors: (.c static)
  *   - (none)
@@ -125,6 +123,7 @@
  *   - Window_setDecorated(window, decorated)
  *   - Window_setNaked(window, naked)
  *   - Window_setBorderless(window, borderless)
+ *   - Window_setViewportFlushToTop(window, flush)
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)
  *   - Window_setFloatingTrafficLights(window, floating)
@@ -160,6 +159,7 @@
  *   - Window_isDecorated(window)
  *   - Window_isNaked(window)
  *   - Window_isBorderless(window)
+ *   - Window_isViewportFlushToTop(window)
  *   - Window_macOS_isTrafficLightButtonVisible(window, light)
  *   - Window_macOS_getTrafficLightHeaderPosition(window, outX, outY)
  *   - Window_isMinimized(window)
@@ -182,13 +182,6 @@
 ;;INTENTION("Fills the Window API seam (window.h) on Windows so the engine can be built there; mirrors the legacy windowsWindow.java.")
 ;;DRAFT
 
-;;;;INCOMPLETE // CreateWindowEx; returns nullptr until implemented.
-Window *Window_create(const char *title, int width, int height) {
-    (void) title;
-    (void) width;
-    (void) height;
-    return nullptr;
-}
 
 ;;INCOMPLETE // DestroyWindow; no-op until implemented.
 void Window_destroy(Window *window) {
@@ -211,6 +204,11 @@ void Window_setShouldClose(Window *window, bool shouldClose) {
 
 ;;INCOMPLETE // PeekMessage/TranslateMessage/DispatchMessage loop; no-op until implemented.
 void Window_pollEvents(void) {
+}
+
+bool Window_pollEventStep(void) {
+    Window_pollEvents();
+    return false;
 }
 
 ;;INCOMPLETE // DXGI swap interval; no-op until implemented.
@@ -262,6 +260,69 @@ void Window_setSize(Window *window, int width, int height) {
     (void) window;
     (void) width;
     (void) height;
+}
+
+float Window_getScale(const Window *window) {
+    (void) window;
+    return 1.0f;
+}
+
+void Window_revalidate(Window *window) {
+    (void) window;
+}
+
+void Window_setSizePoints(Window *window, float width, float height) {
+    (void) window;
+    (void) width;
+    (void) height;
+}
+
+void Window_getSizePoints(const Window *window, float *outWidth, float *outHeight) {
+    (void) window;
+    if (outWidth) *outWidth = 0.0f;
+    if (outHeight) *outHeight = 0.0f;
+}
+
+float Window_widthPoints(const Window *window) {
+    (void) window;
+    return 0.0f;
+}
+
+float Window_heightPoints(const Window *window) {
+    (void) window;
+    return 0.0f;
+}
+
+int Window_viewportWidth(const Window *window) {
+    return Window_width((Window*) window);
+}
+
+int Window_viewportHeight(const Window *window) {
+    return Window_height((Window*) window);
+}
+
+float Window_viewportWidthPoints(const Window *window) {
+    return Window_widthPoints(window);
+}
+
+float Window_viewportHeightPoints(const Window *window) {
+    return Window_heightPoints(window);
+}
+
+int Window_windowWidth(const Window *window) {
+    return Window_width((Window*) window);
+}
+
+int Window_windowHeight(const Window *window) {
+    return Window_height((Window*) window);
+}
+
+float Window_windowWidthPoints(const Window *window) {
+    return Window_widthPoints(window);
+}
+
+float Window_windowHeightPoints(const Window *window) {
+    return Window_heightPoints(window);
 }
 
 ;;INCOMPLETE // SetWindowPos; no-op until implemented.
@@ -383,6 +444,20 @@ void Window_setBorderless(Window *window, bool borderless) {
 bool Window_isBorderless(const Window *window) {
     (void) window;
     return false;
+}
+
+void Window_setViewportFlushToTop(Window *window, bool flush) {
+    (void) window;
+    (void) flush;
+}
+
+bool Window_isViewportFlushToTop(const Window *window) {
+    (void) window;
+    return false;
+}
+
+void Window_setFloatingTrafficLights(Window *window, bool floating) {
+    Window_setViewportFlushToTop(window, floating);
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32: needs a Mac to mean anything.

@@ -34,7 +34,6 @@
 /**
  * ============================================================================
  * CLASS: Capability (capability/capability.c)
- * LEVEL: L4 — Self-Management (R1 host capability probe)
  * ============================================================================
  * Runtime host/CPU capability probe, probed once and cached (the Capability
  * Gating Law). CPU features are the bitset; the OS release is a word.
