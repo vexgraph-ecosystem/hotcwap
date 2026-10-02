@@ -1162,10 +1162,23 @@ void Window_waitEvents(Window *window, int timeoutMs) {
 // double-click target is nearly unhittable — catch it explicitly. A plain
 // double-click zooms (fills the visible frame, the macOS maximize); an
 // Option-double-click enters fullscreen. Both are no-ops if already there.
+//
+// The resize border keeps its own behavior: when the pointer is on an edge or
+// corner (the up-down / diagonal resize cursor), the double-click stays a
+// directional resize and we do not intercept — only the title-bar interior
+// (normal cursor) maximizes.
+static const CGFloat kWindowResizeBorderPoints = 6.0;
+
 - (void)sendEvent:(NSEvent *)event {
     if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
         NSPoint p = [event locationInWindow];
-        if (p.y >= self.frame.size.height - [self vexTitlebarHeight]) {
+        NSSize size = self.frame.size;
+        BOOL onResizeBorder = p.x <= kWindowResizeBorderPoints
+                           || p.x >= size.width - kWindowResizeBorderPoints
+                           || p.y <= kWindowResizeBorderPoints
+                           || p.y >= size.height - kWindowResizeBorderPoints;
+        CGFloat titlebar = [self vexTitlebarHeight];
+        if (!onResizeBorder && p.y >= size.height - titlebar) {
             if ((event.modifierFlags & NSEventModifierFlagOption) != 0)
                 [self toggleFullScreen:self];
             else
