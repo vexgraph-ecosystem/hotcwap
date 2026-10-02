@@ -57,7 +57,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window() / Window(title) / Window(title, width, height)  (chooser in window.h)
+ *   - Window_create(title, width, height)
  *
  * Private Constructors: (.c static)
  *   - (none)
@@ -127,6 +127,13 @@
 ;;INTENTION("Fills the Window API seam (window.h) on Linux so the engine can be built there; mirrors the legacy linuxWindow.java.")
 ;;DRAFT
 
+;;;;INCOMPLETE // XCreateSimpleWindow; returns nullptr until implemented.
+Window *Window_create(const char *title, int width, int height) {
+    (void) title;
+    (void) width;
+    (void) height;
+    return nullptr;
+}
 
 ;;INCOMPLETE // XDestroyWindow; no-op until implemented.
 void Window_destroy(Window *window) {

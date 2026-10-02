@@ -73,17 +73,13 @@ typedef struct WindowDesc {
 //   Window()                     -> defaults, hidden
 //   Window("title")              -> titled, hidden
 //   Window("title", 800, 600)    -> legacy create, hidden
-//   Window("title", 800, 600)    -> legacy create, hidden
+//   Window_new(&(WindowDesc){…}) -> every other field (x/y/centered/shown)
 //
 // All variants construct HIDDEN: construct -> mutate -> Window_show().
 // Placement defaults to centered on the _main screen's visible frame (like an
 // application should be); pass .x/.y in WindowDesc for a custom placement.
 // The macro is function-like, so it never fires when `Window` is used as the
-// type name — only at call sites with parentheses. The declared Window_0/1/3
-// functions are the macro's dispatch targets (declaration/implementation
-// only): every call site uses Window(...), per the Semantic Consistency Law
-// (Construction and arity). A full field-by-field description is applied by
-// constructing then mutating (Window_center/Window_setSize/Window_show).
+// type name — only at call sites with parentheses.
 
 Window *Window_0(void);
 Window *Window_1(const char *title);
@@ -95,6 +91,14 @@ Window *Window_3(const char *title, int width, int height);
     dummy __VA_OPT__(,) __VA_ARGS__, \
     Window_3, Window_2, Window_1, Window_0 \
 )(__VA_ARGS__)
+
+// Parameterized constructor: Desc fields applied on top of defaults.
+// Pass &(WindowDesc){ .title = "...", .centered = true } — unset fields keep
+// their defaults. Returns nullptr on failure.
+Window *Window_new(const WindowDesc *desc);
+
+// Legacy-style convenience constructor: titled, sized, created hidden.
+Window *Window_create(const char *title, int width, int height);
 
 // Close the window and free the handle. Safe if already closed.
 void Window_destroy(Window *window);
@@ -303,8 +307,31 @@ void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y
 ;;PLATFORM_EXCLUSIVE("macOS")
 void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY);
 
+// macOS-exclusive Liquid Glass chrome (macOS 26+). The Window_macOS_ infix IS
+// the platform lock: these symbols exist only in the Cocoa backend, and Liquid
+// Glass has no cross-platform equivalent, so it is never a generic
+// Window_setTsomething. Where the OS/SDK lacks it, Window_setBackdropBlur is
+// the fallback (the Capability Gating Law). Probe before relying on it.
+#define WINDOW_LIQUID_GLASS_STYLE_REGULAR 0
+#define WINDOW_LIQUID_GLASS_STYLE_CLEAR   1
+
+typedef struct WindowLiquidGlassDesc {
+    bool enabled;        // false = remove the glass (restore the plain backdrop)
+    int style;           // WINDOW_LIQUID_GLASS_STYLE_*
+    float cornerRadius;  // native px
+    uint32_t tintColor;  // RGBA8; 0 = no tint
+} WindowLiquidGlassDesc;
+
+;;PLATFORM_EXCLUSIVE("macOS")
+bool Window_macOS_hasLiquidGlass(void);
+;;PLATFORM_EXCLUSIVE("macOS")
+void Window_macOS_setLiquidGlass(Window *window, const WindowLiquidGlassDesc *desc);
+;;PLATFORM_EXCLUSIVE("macOS")
+bool Window_macOS_getLiquidGlass(const Window *window, WindowLiquidGlassDesc *out);
+
 void Window_setOpacity(Window *window, float opacity); // 0.0 to 1.0
 void Window_setTransparentBackground(Window *window, bool transparent); // Makes the window backdrop fully clear so Vulkan can draw holes
+void Window_setBackdropBlur(Window *window, float radius); // frosted backdrop behind the draw view; 0 = none
 void Window_setAlwaysOnTop(Window *window, bool onTop);
 void Window_setClickThrough(Window *window, bool clickThrough);
 void Window_setShadow(Window *window, bool shadow);

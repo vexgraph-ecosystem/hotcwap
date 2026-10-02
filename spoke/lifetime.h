@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "c23/constructor.h"
 
 // spoke/lifetime.h — the Lifetime memory substrate contract for vexspoke (and vexspoke only).
 //
@@ -37,8 +36,7 @@ bool Lifetime_isLegit(const void *ptr);
 bool Lifetime_isValid(const Lifetime *lifetime);
 
 // Lifecycle: create arenas using opaque handles, verifying legitimacy.
-Lifetime Lifetime_2(size_t persistentBytes, size_t transientBytes);
-#define Lifetime(...) CONSTRUCTOR_DISPATCH(Lifetime, __VA_ARGS__)
+Lifetime Lifetime_create(size_t persistentBytes, size_t transientBytes);
 void Lifetime_destroy(Lifetime *lifetime);
 void Lifetime_resetTransient(Lifetime *lifetime);
 

@@ -46,7 +46,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Constructors:
- *   - TrafficLight(nsWindowHandle)
+ *   - TrafficLight_create(nsWindowHandle)
  *   - TrafficLight_destroy(self)
  *
  * Visibility:
@@ -73,7 +73,7 @@ struct TrafficLight {
     NSRect lightBase[TRAFFIC_LIGHT_COUNT];
 };
 
-TrafficLight *TrafficLight_1(void *nsWindowHandle) {
+TrafficLight *TrafficLight_create(void *nsWindowHandle) {
     TrafficLight *self = (TrafficLight*) calloc(1, sizeof(TrafficLight));
     if (self == nullptr)
         return nullptr;

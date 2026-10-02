@@ -56,7 +56,7 @@
  *   generation stays live, the generation never advances, and the next poll
  *   re-attempts once the payload is fixed.
  *   The rename slide (MANIFEST_PROMOTE) IS the swap — there is no clone step
- *   and no watch dir. Hot_poll() runs on main thread only.
+ *   and no watch dir. Hot_poll() runs on _main thread only.
  *
  * STRUCT FIELDS (defined here; hot/hot.h keeps the type opaque):
  * ----------------------------------------------------------------------------
@@ -219,7 +219,7 @@ typedef struct HotModule {
     bool saveCancel;                 // under saveLock
     bool saveRequested;              // under saveLock
     bool saveDone;                   // under saveLock
-    bool swapPending;                // main-thread only
+    bool swapPending;                // _main-thread only
     HotSaveSlot saveSlots[HOT_MAX_MODULES];
     size_t saveCount;
 } HotModule;

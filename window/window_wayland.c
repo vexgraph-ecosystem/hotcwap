@@ -151,11 +151,11 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window_0(void)                        : _windowNew(nullptr)
- *   - Window_1(title)                       : _windowNew(&{ .title })
+ *   - Window_0(void)                        : Window_new(nullptr)
+ *   - Window_1(title)                       : Window_new(&{ .title })
  *   - Window_3(title, width, height)
- *   - Window(desc fields via mutate)                      : descResolve + waylandAlloc + show
- *   - Window(...) chooser in window.h
+ *   - Window_new(desc)                      : descResolve + waylandAlloc + show
+ *   - Window_create(title, width, height)
  *
  * Private Constructors: (.c static)
  *   - waylandAlloc(desc)                    : shared internal constructor
@@ -1413,18 +1413,18 @@ static Window *waylandAlloc(const WindowDesc *desc) {
 }
 
 Window *Window_0(void) {
-    return _windowNew(nullptr);
+    return Window_new(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return _windowNew(&(WindowDesc){ .title = title });
+    return Window_new(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-static Window *_windowNew(const WindowDesc *desc) {
+Window *Window_new(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *window = waylandAlloc(&d);
     if (window == nullptr)
@@ -1434,6 +1434,9 @@ static Window *_windowNew(const WindowDesc *desc) {
     return window;
 }
 
+Window *Window_create(const char *title, int width, int height) {
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+}
 
 // Tear down the surface + handle. Safe regardless of whether the compositor
 // already closed it: object destruction is idempotent here, and every listener

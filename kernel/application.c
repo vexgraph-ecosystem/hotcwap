@@ -153,7 +153,7 @@ void Application_shutdown() {
 }
 
 // KEEP-ALIVE PARKED LOOP — the app lives on its own: Application_run parks
-// the main thread here until EVERY registered window is closed, ending the
+// the _main thread here until EVERY registered window is closed, ending the
 // application. It does two things only: lets the Window chew its own event
 // queue (Window_pollEvents — events are the Window's job, never the app's),
 // and asks each window whether it shouldClose (a plain if/read). The park

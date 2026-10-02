@@ -104,7 +104,7 @@ bool Application_isFinished(const Application *self);
 // cadence. Empty windows live on their own — no graphvex dependency.
 void Application_run(Application *self);
 
-// --- Hot-reload drive (generation-driven, main thread only) ---
+// --- Hot-reload drive (generation-driven, _main thread only) ---
 // Poll this app's HotModule (bind via Application_setHot): Hot_poll reloads
 // bin/current/<library> when the manifest generation stamp moves, then the
 // hotReloadFn notification fires for every executed swap. No-op when hot is

@@ -126,8 +126,8 @@
  *   - Window_0(void)
  *   - Window_1(title)
  *   - Window_3(title, width, height)
- *   - Window(desc fields via mutate)
- *   - Window(...) chooser in window.h
+ *   - Window_new(desc)
+ *   - Window_create(title, width, height)
  *
  * Private Constructors: (.c static)
  *   - windowAlloc(desc)               : shared constructor core
@@ -212,6 +212,7 @@
  *   - Window_setFloatingTrafficLights(window, floating)
  *   - Window_macOS_setTrafficLightButtonVisible(window, light, visible)
  *   - Window_macOS_setTrafficLightHeaderPosition(window, x, y)
+ *   - Window_macOS_hasLiquidGlass() / Window_macOS_setLiquidGlass(window, desc)
  *   - Window_setOpacity(window, opacity)
  *   - Window_setTransparentBackground(window, transparent)
  *   - Window_setAlwaysOnTop(window, onTop)
@@ -359,6 +360,13 @@ struct Window {
     // Window_macOS_* / setFloatingTrafficLights surface to it (the Single
     // Class Per File Law). nullptr = never created (headless / BORDERLESS).
     TrafficLight *trafficLights;
+
+    // The draw view sits ABOVE the content view, so a backdrop-blur effect view
+    // can live behind it (behindWindow blur shows through the transparent parts).
+    NSView *glView;        // where presents land (layer.contents)
+    void *backdropView;    // NSVisualEffectView, or nullptr
+    void *glassView;       // macOS 26 NSGlassEffectView, or nullptr
+    WindowLiquidGlassDesc liquidGlass; // last-applied Liquid Glass descriptor
 
     WindowResizeRenderFn resizeRenderFn;
     void *resizeRenderUserdata;
@@ -1247,6 +1255,13 @@ static Window *windowAlloc(const WindowDesc *desc) {
         [contentView setWantsLayer:YES];
         [window setContentView:contentView];
 
+        // A dedicated draw view on TOP of the content view. Presents land here;
+        // a backdrop-blur effect view (Window_setBackdropBlur) sits behind it.
+        NSView *glView = [[NSView alloc] initWithFrame:contentView.bounds];
+        [glView setWantsLayer:YES];
+        [glView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [contentView addSubview:glView];
+
         // Green traffic light enters native fullscreen.
         [window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
 
@@ -1269,6 +1284,9 @@ static Window *windowAlloc(const WindowDesc *desc) {
             return nullptr;
         (*w).nsWindow = window;
         window.vexHandle = w;
+        (*w).glView = glView;
+        (*w).backdropView = nullptr;
+        (*w).glassView = nullptr;
         (*w).delegate = delegate;
         WindowEvent_init(&(*w).lifecycle);
         atomic_store_explicit(&(*w).shouldClose, false, memory_order_relaxed);
@@ -1299,7 +1317,7 @@ static Window *windowAlloc(const WindowDesc *desc) {
         (*w).cursorType = WINDOW_CURSOR_DEFAULT;
         // Traffic-light chrome controller (all three lights visible by default).
         // Created against the NSWindow; nullptr only if calloc fails.
-        (*w).trafficLights = TrafficLight((__bridge void*) window);
+        (*w).trafficLights = TrafficLight_create((__bridge void*) window);
         (*w).resizeRenderFn = nullptr;
         (*w).resizeRenderUserdata = nullptr;
         (*w).id = windowIdAcquire(window, w);
@@ -1337,21 +1355,19 @@ static WindowDesc descResolve(const WindowDesc *desc) {
 
 // --- Constructors -----------------------------------------------------------
 
-static Window *_windowNew(const WindowDesc *desc);
-
 Window *Window_0(void) {
-    return _windowNew(nullptr);
+    return Window_new(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return _windowNew(&(WindowDesc){ .title = title });
+    return Window_new(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-static Window *_windowNew(const WindowDesc *desc) {
+Window *Window_new(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *w = windowAlloc(&d);
     if (w == nullptr)
@@ -1365,6 +1381,9 @@ static Window *_windowNew(const WindowDesc *desc) {
     return w;
 }
 
+Window *Window_create(const char *title, int width, int height) {
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+}
 
 // Tear down the window and free the handle. Safe to call whether the user
 // already closed the window or not: if it's still open we close it, and we
@@ -2046,6 +2065,94 @@ void Window_setTransparentBackground(Window *window, bool transparent) {
     }
 }
 
+// Frosted backdrop: a behindWindow NSVisualEffectView under the draw view, so
+// the transparent parts of a present show the blurred desktop through. radius
+// is a hint (AppKit materials are fixed); 0 removes it.
+void Window_setBackdropBlur(Window *window, float radius) {
+    if (window == nullptr)
+        return;
+    @autoreleasepool {
+        NSView *content = [(*window).nsWindow contentView];
+        if (content == nil)
+            return;
+        if (radius > 0.0f) {
+            if ((*window).backdropView == nullptr) {
+                NSVisualEffectView *ve = [[NSVisualEffectView alloc] initWithFrame:content.bounds];
+                ve.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                ve.material = NSVisualEffectMaterialHUDWindow;
+                ve.state = NSVisualEffectStateActive;
+                ve.autoresizingMask = (NSViewWidthSizable | NSViewHeightSizable);
+                [content addSubview:ve
+                        positioned:NSWindowBelow
+                        relativeTo:(*window).glView];
+                (*window).backdropView = (__bridge_retained void *) ve;
+            }
+        } else if ((*window).backdropView != nullptr) {
+            NSView *ve = (__bridge NSView *)(*window).backdropView;
+            [ve removeFromSuperview];
+            CFRelease((*window).backdropView);
+            (*window).backdropView = nullptr;
+        }
+    }
+}
+
+// Liquid Glass (macOS 26+): a real NSGlassEffectView behind the draw view. The
+// class is resolved by name at runtime so this compiles against any SDK, and
+// @available gates the OS; where it is unavailable the NSVisualEffectView
+// backdrop (Window_setBackdropBlur) is the effective fallback.
+bool Window_macOS_hasLiquidGlass(void) {
+    if (@available(macOS 26.0, *))
+        return NSClassFromString(@"NSGlassEffectView") != Nil;
+    return false;
+}
+
+void Window_macOS_setLiquidGlass(Window *window, const WindowLiquidGlassDesc *desc) {
+    if (window == nullptr)
+        return;
+    (*window).liquidGlass = desc != nullptr ? *desc : (WindowLiquidGlassDesc){ 0 };
+    @autoreleasepool {
+        if (!(*window).liquidGlass.enabled || !Window_macOS_hasLiquidGlass()) {
+            if ((*window).glassView != nullptr) {
+                NSView *g = (__bridge NSView *)(*window).glassView;
+                [g removeFromSuperview];
+                CFRelease((*window).glassView);
+                (*window).glassView = nullptr;
+            }
+            return;
+        }
+        NSView *content = [(*window).nsWindow contentView];
+        if (content == nil)
+            return;
+        if ((*window).glassView == nullptr) {
+            Class glassClass = NSClassFromString(@"NSGlassEffectView");
+            NSView *g = [[glassClass alloc] initWithFrame:content.bounds];
+            g.autoresizingMask = (NSViewWidthSizable | NSViewHeightSizable);
+            [content addSubview:g positioned:NSWindowBelow relativeTo:(*window).glView];
+            (*window).glassView = (__bridge_retained void *) g;
+        }
+        NSView *g = (__bridge NSView *)(*window).glassView;
+        WindowLiquidGlassDesc d = (*window).liquidGlass;
+        if ([g respondsToSelector:NSSelectorFromString(@"setStyle:")])
+            [g setValue:@(d.style) forKey:@"style"];
+        if ([g respondsToSelector:NSSelectorFromString(@"setCornerRadius:")])
+            [g setValue:@(d.cornerRadius) forKey:@"cornerRadius"];
+        if ([g respondsToSelector:NSSelectorFromString(@"setTintColor:")]) {
+            CGFloat r  = (CGFloat) ((d.tintColor >> 24) & 0xFFu) / 255.0;
+            CGFloat gg = (CGFloat) ((d.tintColor >> 16) & 0xFFu) / 255.0;
+            CGFloat b  = (CGFloat) ((d.tintColor >> 8) & 0xFFu) / 255.0;
+            CGFloat a  = (CGFloat) (d.tintColor & 0xFFu) / 255.0;
+            [g setValue:[NSColor colorWithSRGBRed:r green:gg blue:b alpha:a] forKey:@"tintColor"];
+        }
+    }
+}
+
+bool Window_macOS_getLiquidGlass(const Window *window, WindowLiquidGlassDesc *out) {
+    if (window == nullptr || out == nullptr)
+        return false;
+    *out = (*window).liquidGlass;
+    return true;
+}
+
 void Window_setAlwaysOnTop(Window *window, bool onTop) {
     if (window == nullptr)
         return;
@@ -2058,7 +2165,7 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
     if (window == nullptr || pixels == nullptr || width <= 0 || height <= 0)
         return;
     @autoreleasepool {
-        NSView *view = [(*window).nsWindow contentView];
+        NSView *view = (*window).glView ? (*window).glView : [(*window).nsWindow contentView];
         if (view == nil)
             return;
         // ZERO-COPY: the CGImage borrows the caller's buffer directly — no
@@ -2070,7 +2177,7 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
             return;
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGImageRef img = CGImageCreate((size_t) width, (size_t) height, 8, 32, stride, cs,
-                                       kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big,
+                                       kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
                                        provider, NULL, false, kCGRenderingIntentDefault);
         CGColorSpaceRelease(cs);
         CGDataProviderRelease(provider);
@@ -2182,7 +2289,7 @@ bool Window_writePNG(const void *pixels, size_t stride, int width, int height, c
             return false;
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGImageRef img = CGImageCreate((size_t) width, (size_t) height, 8, 32, stride, cs,
-                                       kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big,
+                                       kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
                                        provider, NULL, false, kCGRenderingIntentDefault);
         CGColorSpaceRelease(cs);
         CGDataProviderRelease(provider);

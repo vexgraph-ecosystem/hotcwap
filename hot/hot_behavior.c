@@ -34,7 +34,7 @@
  *   Phase-2 L2/L3 behavior subject: pure pulse/bar math + texture path.
  *
  *   Deliberately stateless-on-GPU: this module NEVER calls Vk_* or touches
- *   the Panel tree. Host handlers (main/test_suite.c, _tests/hotcwap/) own
+ *   the Panel tree. Host handlers (_main/test_suite.c, _tests/hotcwap/) own
  *   cmdBuffer + Panel pointers and delegate only the math here. That keeps swap safe by
  *   construction — no code pointers cross the dylib boundary, no dangling
  *   renderHandler after dlclose.

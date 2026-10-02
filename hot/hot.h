@@ -33,7 +33,7 @@
 // is reloaded, the NSWindow/NSView/CAMetalLayer persist — only the Vulkan
 // offscreen GPU objects and Metal drawable resources are recreated.
 //
-// Hot_poll() runs on main thread only; the state-save worker is this class's
+// Hot_poll() runs on _main thread only; the state-save worker is this class's
 // one supervised thread (joined bounded per the Bounded Wait Law).
 
 typedef enum {
@@ -60,7 +60,7 @@ HotModule *Hot_init(const char *library);
 // is capped), then close every module, drain the retire ring, free.
 void HotShutdown(HotModule *hot);
 
-// Poll for updates. Call once per frame from the main loop (main thread
+// Poll for updates. Call once per frame from the _main loop (_main thread
 // only). Reloads bin/current/<library> when the generation stamp moves;
 // returns HOT_OK if nothing changed, HOT_OK + loaded_count > 0 when a swap
 // landed. A swap that must preserve state spans two polls: this call kicks

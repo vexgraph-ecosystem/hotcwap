@@ -84,7 +84,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - ManifestPath_2(dest, cap)               : Bind builder to buffer
+ *   - ManifestPath_0(dest, cap)               : Bind builder to buffer
  *   - Manifest_init(first, ...)               : ONE-TIME initializer (MANIFEST macro)
  *   - Manifest_uninstall(first, ...)          : Complete uninstall (UNINSTALL macro)
  *
@@ -913,7 +913,7 @@ static bool stage_has_content(const char *dir) {
 
 // --- constructors ------------------------------------------------------------
 
-ManifestPath ManifestPath_2(char *dest, size_t cap) {
+ManifestPath ManifestPath_0(char *dest, size_t cap) {
     ManifestPath self;
     self.buf = dest;
     self.cap = cap;
@@ -961,7 +961,7 @@ bool Manifest_init(const char *first, ...) {
 
     // Resolve the path WITHOUT creating it, so the guard below can inspect the
     // real pre-existing state of the target directory.
-    ManifestPath path = ManifestPath(g_root, sizeof(g_root));
+    ManifestPath path = ManifestPath_0(g_root, sizeof(g_root));
     if (!ManifestPath_begin(&path, segments[0]))
         return false;
 
@@ -994,7 +994,7 @@ bool Manifest_init(const char *first, ...) {
     }
 
     // Guard passed — create the tree now.
-    path = ManifestPath(g_root, sizeof(g_root));
+    path = ManifestPath_0(g_root, sizeof(g_root));
     if (!ManifestPath_begin(&path, segments[0]))
         return false;
     for (uint32_t i = 1; i < segCount; i++) {

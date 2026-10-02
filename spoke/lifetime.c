@@ -60,7 +60,7 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Lifetime(persistentBytes, transientBytes) : Allocate verified pair of arenas
+ *   - Lifetime_create(persistentBytes, transientBytes) : Allocate verified pair of arenas
  *   - Lifetime_bind(pArena, tArena, pType, tType, rel) : Wrap external verified arenas
  *
  * Private Constructors: (.c static)
@@ -94,21 +94,21 @@
 
 // Dynamic link symbols provided by the underlying memory runtime (pure void* ABI).
 // hotcwap does NOT include nio/mem.h or any vexspoke header files.
-extern void *MemoryArena_1(size_t totalBytes);
+extern void *MemoryArena_create(size_t totalBytes);
 extern void MemoryArena_destroy(void *arena);
 extern void MemoryArena_freeAll(void *arena);
 extern void *MemoryArena_alloc(void *arena, uint64_t typeId, size_t numBytes);
 extern void MemoryArena_free(void *arena, void *ptr);
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
-Lifetime Lifetime_2(size_t persistentBytes, size_t transientBytes) {
+Lifetime Lifetime_create(size_t persistentBytes, size_t transientBytes) {
     Lifetime lt = {0};
     if (persistentBytes == 0)
         persistentBytes = 64 * 1024 * 1024;
     if (transientBytes == 0)
         transientBytes = 64 * 1024 * 1024;
 
-    void *p = MemoryArena(persistentBytes);
+    void *p = MemoryArena_create(persistentBytes);
     if (!Lifetime_isLegit(p)) {
         if (p != nullptr) {
             MemoryArena_destroy(p);
@@ -116,7 +116,7 @@ Lifetime Lifetime_2(size_t persistentBytes, size_t transientBytes) {
         return lt;
     }
 
-    void *t = MemoryArena(transientBytes);
+    void *t = MemoryArena_create(transientBytes);
     if (!Lifetime_isLegit(t)) {
         MemoryArena_destroy(p);
         if (t != nullptr) {

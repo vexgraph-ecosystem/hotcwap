@@ -122,7 +122,7 @@
  * Private Core Functions: (.c static)
  *   - kernelRunActive(self)                   : Test if kernel is currently running or draining
  *   - kernelPostDeferred(self, kind, ptr)     : Post registration to off-thread mailbox
- *   - kernelDrainDeferred(self)               : Drain mailbox onto main thread
+ *   - kernelDrainDeferred(self)               : Drain mailbox onto _main thread
  *   - kernelAddApplicationInternal(self, app) : Direct application registration
  *   - kernelAddProcessInternal(self, p)       : Direct process registration
  *   - kernelAddConsoleInternal(self, c)       : Direct console registration
@@ -202,7 +202,7 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     if (!self)
         return NULL;
     // Create the Lifetime memory substrate directly via vexspoke's MemoryArena.
-    Lifetime lt = Lifetime(arenaBytes, transientBytes);
+    Lifetime lt = Lifetime_create(arenaBytes, transientBytes);
     if (!Lifetime_isValid(&lt)) {
         Lifetime_destroy(&lt);
         free(self);

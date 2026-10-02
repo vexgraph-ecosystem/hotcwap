@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "c23/constructor.h"
 
 // hot/manifest.h — the MANIFEST(...) install-layout + manifest.json catalog authority.
 //
@@ -119,8 +118,7 @@ typedef struct ManifestPath {
 //   ManifestPath(dest, cap)           — bind a builder to a caller buffer.
 //   MANIFEST(root, seg1, ...)         — one-shot init + create dirs (below).
 
-ManifestPath ManifestPath_2(char *dest, size_t cap);
-#define ManifestPath(...) CONSTRUCTOR_DISPATCH(ManifestPath, __VA_ARGS__)
+ManifestPath ManifestPath_0(char *dest, size_t cap);
 
 // --- CORE FUNCTIONS ----------------------------------------------------------
 

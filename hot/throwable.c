@@ -99,7 +99,7 @@ void Throwable_registerTeardown(ThrowableTeardownFn fn) {
     if (fn == NULL) return;
 
     if (s_teardownList == NULL) {
-        s_teardownList = ChunkedList(ID_BIT64, sizeof(ThrowableTeardownFn), VEX_CHUNKED_BYTES_DEFAULT);
+        s_teardownList = ChunkedList_3(ID_BIT64, sizeof(ThrowableTeardownFn), VEX_CHUNKED_BYTES_DEFAULT);
         if (s_teardownList == NULL) return;
     }
 

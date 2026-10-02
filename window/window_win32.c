@@ -150,11 +150,11 @@
  * FUNCTION REGISTRY:
  * ----------------------------------------------------------------------------
  * Public Constructors: (.h)
- *   - Window_0(void)                        : _windowNew(nullptr)
- *   - Window_1(title)                       : _windowNew(&{ .title })
+ *   - Window_0(void)                        : Window_new(nullptr)
+ *   - Window_1(title)                       : Window_new(&{ .title })
  *   - Window_3(title, width, height)
- *   - Window(desc fields via mutate)                      : descResolve + windowAlloc + show
- *   - Window(...) chooser in window.h
+ *   - Window_new(desc)                      : descResolve + windowAlloc + show
+ *   - Window_create(title, width, height)
  *
  * Private Constructors: (.c static)
  *   - windowAlloc(desc)                     : shared constructor implementation
@@ -1165,21 +1165,19 @@ static WindowDesc descResolve(const WindowDesc *desc) {
 
 // --- Constructors -----------------------------------------------------------
 
-static Window *_windowNew(const WindowDesc *desc);
-
 Window *Window_0(void) {
-    return _windowNew(nullptr);
+    return Window_new(nullptr);
 }
 
 Window *Window_1(const char *title) {
-    return _windowNew(&(WindowDesc){ .title = title });
+    return Window_new(&(WindowDesc){ .title = title });
 }
 
 Window *Window_3(const char *title, int width, int height) {
-    return _windowNew(&(WindowDesc){ .title = title, .width = width, .height = height });
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
 }
 
-static Window *_windowNew(const WindowDesc *desc) {
+Window *Window_new(const WindowDesc *desc) {
     WindowDesc d = descResolve(desc);
     Window *w = windowAlloc(&d);
     if (w == nullptr)
@@ -1189,6 +1187,9 @@ static Window *_windowNew(const WindowDesc *desc) {
     return w;
 }
 
+Window *Window_create(const char *title, int width, int height) {
+    return Window_new(&(WindowDesc){ .title = title, .width = width, .height = height });
+}
 
 // Tear down the window and free the handle. Safe to call whether the user
 // already closed the window or not: if it's still open we close it. The
@@ -1914,7 +1915,7 @@ WindowCursorType Window_getCursorType(const Window *window) {
 
 // The lean Win32 software path: copy the caller's RGBA frame into a staging
 // DIB and InvalidateRect so the next WM_PAINT StretchDIBits-s blits it scaled
-// to fit the client area. Thread 0 only (BeginPaint/EndPaint are main-thread).
+// to fit the client area. Thread 0 only (BeginPaint/EndPaint are _main-thread).
 bool Window_present(Window *window, const Buffer *frame) {
     if (window == nullptr || frame == nullptr)
         return false;
