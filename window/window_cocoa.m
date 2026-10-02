@@ -27,6 +27,8 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <ImageIO/ImageIO.h>
+#import <CoreVideo/CoreVideo.h>
+#import <IOSurface/IOSurface.h>
 #import <stdatomic.h>
 #include <math.h>
 
@@ -1145,6 +1147,34 @@ void Window_waitEvents(Window *window, int timeoutMs) {
         return NO;
     return [super canBecomeKeyWindow];
 }
+
+// The standard titlebar strip height (points). A FullSizeContentView window
+// reports a zero titlebar inset, so fall back to the platform's ~28pt strip.
+- (CGFloat)vexTitlebarHeight {
+    NSRect content = [self contentRectForFrameRect:self.frame];
+    CGFloat h = self.frame.size.height - content.size.height;
+    return h > 0.0 ? h : 28.0;
+}
+
+// Titlebar double-click is the accessibility affordance Windows ships as the
+// maximize (square) button, and macOS ships as the green zoom. On a NAKED /
+// full-size-content window the title bar is transparent, so AppKit's own
+// double-click target is nearly unhittable — catch it explicitly. A plain
+// double-click zooms (fills the visible frame, the macOS maximize); an
+// Option-double-click enters fullscreen. Both are no-ops if already there.
+- (void)sendEvent:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        NSPoint p = [event locationInWindow];
+        if (p.y >= self.frame.size.height - [self vexTitlebarHeight]) {
+            if ((event.modifierFlags & NSEventModifierFlagOption) != 0)
+                [self toggleFullScreen:self];
+            else
+                [self performZoom:self];
+            return;
+        }
+    }
+    [super sendEvent:event];
+}
 @end
 
 // Build the NSWindow + C handle. Shared by every constructor. The window is
@@ -2043,6 +2073,87 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
         [CATransaction commit];
         CGImageRelease(img);
     }
+}
+
+// ── Zero-copy present surface (IOSurface + CALayer) ─────────────────────────
+// The window's draw view already wantsLayer; we hand the layer an IOSurface as
+// its contents. The render repo draws straight into the IOSurface on the GPU,
+// so publishing is a pointer swap, not a pixel copy.
+void *Window_createPresentSurface(Window *window, int widthPx, int heightPx) {
+    if (window == nullptr || widthPx <= 0 || heightPx <= 0)
+        return nullptr;
+    @autoreleasepool {
+        // Row bytes must be aligned for Metal to build a texture from the
+        // IOSurface (an unaligned width*4 aborts in _mtlValidateStrideTextureParameters).
+        int rowBytes = ((widthPx * 4) + 63) & ~63;
+        NSDictionary *props = @{
+            (__bridge id) kIOSurfaceWidth: @(widthPx),
+            (__bridge id) kIOSurfaceHeight: @(heightPx),
+            (__bridge id) kIOSurfaceBytesPerElement: @(4),
+            (__bridge id) kIOSurfaceBytesPerRow: @(rowBytes),
+            (__bridge id) kIOSurfacePixelFormat: @(kCVPixelFormatType_32RGBA),
+        };
+        IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) props);
+        return (void *) surface;
+    }
+}
+
+void Window_destroyPresentSurface(Window *window, void *surface) {
+    (void) window;
+    if (surface != nullptr)
+        CFRelease((CFTypeRef) surface);
+}
+
+void Window_presentSurface(Window *window, void *surface) {
+    if (window == nullptr || surface == nullptr)
+        return;
+    @autoreleasepool {
+        NSView *view = (*window).glView ? (*window).glView : [(*window).nsWindow contentView];
+        if (view == nil)
+            return;
+        view.wantsLayer = YES;
+        CALayer *layer = view.layer;
+        if (layer == nil)
+            return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        layer.contents = (__bridge id)(IOSurfaceRef) surface;
+        layer.contentsGravity = kCAGravityResize;
+        double scale = (*window).cachedScale > 0.0 ? (*window).cachedScale : 1.0;
+        layer.contentsScale = scale;
+        // presentsWithTransaction semantics: mid-drag the frame must land WITH
+        // the resize, so flush synchronously; at rest let CA commit on its own.
+        if (Window_isLiveResizing(window))
+            [CATransaction flush];
+        [CATransaction commit];
+    }
+}
+
+void *Window_presentSurfaceContents(const Window *window) {
+    if (window == nullptr)
+        return nullptr;
+    NSView *view = (*window).glView ? (*window).glView : [(*window).nsWindow contentView];
+    if (view == nil || view.layer == nil)
+        return nullptr;
+    return (__bridge void *) view.layer.contents;
+}
+
+bool Window_readPresentSurface(Window *window, void *surface, void *destRGBA, size_t destStride) {
+    (void) window;
+    if (surface == nullptr || destRGBA == nullptr || destStride == 0)
+        return false;
+    IOSurfaceRef s = (IOSurfaceRef) surface;
+    if (IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess)
+        return false;
+    const uint8_t *base = (const uint8_t *) IOSurfaceGetBaseAddress(s);
+    size_t srcStride = IOSurfaceGetBytesPerRow(s);
+    uint32_t w = (uint32_t) IOSurfaceGetWidth(s);
+    uint32_t h = (uint32_t) IOSurfaceGetHeight(s);
+    for (uint32_t y = 0; y < h; y++)
+        memcpy((uint8_t *) destRGBA + (size_t) y * destStride,
+               base + (size_t) y * srcStride, (size_t) w * 4u);
+    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+    return true;
 }
 
 // Write a tightly packed RGBA8 buffer to a PNG file. The screenshot/CAPTURE

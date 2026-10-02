@@ -206,6 +206,26 @@ bool Window_isTransparent(const Window *window);
 // referenced, not copied, so it must stay valid until the next present.
 void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int width, int height);
 
+// ── Zero-copy present surface (Apple; capability-gated) ─────────────────────
+// An IOSurface the window's draw view (a CALayer) displays directly. The render
+// repository imports this handle as a GPU target (VK_EXT_metal_objects) and
+// draws straight into it; Window_presentSurface publishes it to the layer. The
+// host owns the handle — graphvex never frees it. Off-Apple returns NULL and the
+// rest are no-ops (the Capability Gating Law).
+//
+// Transaction policy (the presentsWithTransaction semantics): during a live
+// resize the publish commits synchronously inside the resize transaction so the
+// frame tracks the drag; at rest it commits asynchronously and lets Core
+// Animation composite.
+void *Window_createPresentSurface(Window *window, int widthPx, int heightPx);
+void  Window_destroyPresentSurface(Window *window, void *surface);
+void  Window_presentSurface(Window *window, void *surface);
+void *Window_presentSurfaceContents(const Window *window);   // what the layer shows
+
+// Read a present surface's pixels into a tightly packed RGBA8 buffer (the
+// screenshot/CAPTURE path on the GPU seam). `destStride` is bytes/row. Thread 0.
+bool Window_readPresentSurface(Window *window, void *surface, void *destRGBA, size_t destStride);
+
 // Screenshot: write a tightly packed RGBA8 buffer (same layout as
 // Window_presentRGBA) to a PNG file. The CAPTURE() path for tests/agents.
 // Apple-only (ImageIO). Returns true on success.
