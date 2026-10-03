@@ -1395,8 +1395,7 @@ void Window_destroy(Window *window) {
         if (sPendingKeyWindow == (*window).nsWindow)
             sPendingKeyWindow = nil;
         [(*window).nsWindow setDelegate:nil];
-        if (!atomic_load_explicit(&(*window).shouldClose, memory_order_relaxed))
-            [(*window).nsWindow close];
+        [(*window).nsWindow close]; // flag-only close requests may still have a native window
         Key_detachWindowAll((*window).id);
         Mouse_detachWindowAll((*window).id);
         Touch_detachWindowAll((*window).id);
@@ -1424,6 +1423,12 @@ bool Window_shouldClose(Window *window) {
 void Window_setShouldClose(Window *window, bool shouldClose) {
     if (window != nullptr)
         atomic_store_explicit(&(*window).shouldClose, shouldClose, memory_order_relaxed);
+}
+
+void Window_close(Window *window) {
+    if (!window) return;
+    @autoreleasepool { [(*window).nsWindow close]; }
+    atomic_store_explicit(&(*window).shouldClose, true, memory_order_relaxed);
 }
 
 // --- Present policy (pure state; a future render path consumes it) ----------

@@ -12,6 +12,8 @@
 #include "annotation/getter.h"
 #include "annotation/setter.h"
 #include "input/key.h"
+#include "input/mouse.h"
+#include "input/touch.h"
 #include "system/system.h"
 
 ;;DEFINITION
@@ -23,7 +25,7 @@
  *   The executable manifest for a running graphical application: identity
  *   (name/author/version/icon), top-level window registry, and hot-reload slot.
  *   Application classifies GUI executables that present pixels through a Window;
- *   it is a pure data descriptor with zero loops, ticks, or render workers.
+ *   it supervises startup work and window lifetime, never a scene/render worker.
  *
  * MEMORY LAYOUT & LIFECYCLE:
  *   Flat fixed-size buffers for strings and an array of up to 16 Window pointers.
@@ -31,8 +33,8 @@
  *   Allocation is cold-path heap via calloc; windows are referenced, never owned.
  *
  * OPERATIONAL INVARIANTS:
- *   - The Kernel drives the event pump and observes the running flag.
- *   - Application_run is an opt-in parked loop blocking on window closure only.
+ *   - The owner-thread lifetime loop or Kernel reactor services native events.
+ *   - Application_start blocks until all windows close or an explicit close request.
  *   - Frame scheduling and GPU presentation belong strictly to R3 GfxLoop.
  * ============================================================================
  */
@@ -46,7 +48,7 @@
  *   The manifest for a running executable: name, author, version, icon, and the
  *   window registry. Application is GUI by definition (presents pixels through
  *   a Window); CLI functions are Process, TUI sessions are Console. It is a
- *   pure data object — it NEVER owns a loop, a tick, or a present worker. The
+ *   lifetime supervisor — it NEVER owns a scene tick or a present worker. The
  *   Kernel (R1) drives the event pump and observes the running flag; graphvex
  *   (R3) drives frame scheduling, presentation, and telemetry writes.
  *
@@ -71,7 +73,7 @@
  *       registered window reports shouldClose (plain if/read — the Window
  *       owns its own events; this only asks). False for a windowless
  *       manifest (nothing to end).
- *   appParkSlice(const self)       : one 250ms park turn in 25ms slices;
+ *   appParkSlice(self)             : one owner service turn + 5ms park;
  *       each slice lets the Window pump its own queue (Window_pollEvents)
  *       and re-checks the running flag. This is what keeps an empty window
  *       alive and responsive — never a present, never a tick.
@@ -90,11 +92,11 @@
  *   - Application_init()                       : One-shot bootstrap
  *   - Application_shutdown()                   : Teardown input/key state
  *   - Application_free(self)                   : Release manifest memory
- *   - Application_start(self)                  : Flag only — marks running true
- *   - Application_stop(self)                   : Flag only — marks running false
+ *   - Application_start(self)                  : Begin, service, close/join
+ *   - Application_stop(self)                   : Thread-safe close request
  *   - Application_isRunning(self)              : Queries atomic running flag
  *   - Application_isFinished(self)             : Completion predicate for Kernel
- *   - Application_run(self)                    : Keep-alive parked loop
+ *   - Application_run(self)                    : Keep-alive parked loop + worker join
  *   - Application_pollHot(self)                : Generation-driven swap
  *   - Application_onHotReload(self, fn, user)  : Assign hot-reload callback
  *   - Application_addWindow(self, win)         : Register top-level window
@@ -102,7 +104,7 @@
  *
  * Private Core Functions: (.c static)
  *   - appAllWindowsClosed(self)                : Test if all registered windows closed
- *   - appParkSlice(self)                       : 250ms park in 25ms slices
+ *   - appParkSlice(self)                       : owner/input service and 5ms park
  *
  * Public Setters: (.h)
  *   - Application_setHot(self, hot)
@@ -136,6 +138,11 @@
 // the caller's (they opened the Application, they close it).
 // Plain bool, not _Atomic: construction is single-threaded cold-path (the Cold-Strict, Hot-Minimal Validation Law).
 static bool s_bootstrapped = false;
+static _Thread_local Application *s_current;
+
+;;INTENTION("Application_start owns lifetime, not scene timing: startup callbacks "
+            "run on a supervised worker; native operations are serviced on the "
+            "owner thread. Hiding never completes an app; all windows must close.")
 
 bool Application_init() {
     if (s_bootstrapped)
@@ -157,16 +164,15 @@ void Application_shutdown() {
 // application. It does two things only: lets the Window chew its own event
 // queue (Window_pollEvents — events are the Window's job, never the app's),
 // and asks each window whether it shouldClose (a plain if/read). The park
-// cadence is 250ms (4 checks/sec — not hot looping); events are pumped every
-// 25ms slice so the empty window stays responsive during the park. Nothing
+// cadence is a 5ms parked slice, so shutdown/input and focus pacing stay
+// responsive without busy-spinning. Nothing
 // here touches graphvex, present, or GfxLoop — hotcwap owns the window end.
-#define APP_PARK_CADENCE_NS (250 * 1000 * 1000)
-#define APP_PARK_SLICE_NS   (25 * 1000 * 1000)
-#define APP_PARK_SLICES     10
+#define APP_PARK_SLICE_NS   (5 * 1000 * 1000)
+#define APP_PARK_SLICES     1
 
 static bool appAllWindowsClosed(const Application *self) {
     if ((*self).window_count == 0)
-        return false; // windowless manifest: nothing to end
+        return (*self).hadWindows;
     for (uint32_t i = 0; i < (*self).window_count; i++)
         if (!Window_shouldClose((*self).windows[i]))
             return false;
@@ -178,6 +184,10 @@ static void appParkSlice(Application *self) {
         if (!atomic_load_explicit(&(*self).running, memory_order_relaxed))
             return;
         Window_pollEvents(); // the Window pumps its own queue (its job)
+        Application *previous = s_current; s_current = self;
+        Key_dispatchEvents(); Mouse_dispatchEvents(); Touch_dispatchEvents();
+        s_current = previous;
+        Application_poll(self);
         struct timespec slice = { APP_PARK_SLICE_NS / 1000000000ULL,
                                   APP_PARK_SLICE_NS % 1000000000ULL };
         nanosleep(&slice, nullptr);
@@ -189,6 +199,10 @@ Application *Application_0(void) {
     Application_init();
     Application *self = (Application*) calloc(1, sizeof(Application));
     if (!self) return nullptr;
+    if (pthread_mutex_init(&(*self).invokeMutex, NULL) != 0) { free(self); return NULL; }
+    if (pthread_cond_init(&(*self).invokeCondition, NULL) != 0) {
+        pthread_mutex_destroy(&(*self).invokeMutex); free(self); return NULL;
+    }
     strncpy((*self).name, "vex", APP_MAX_NAME - 1);
     return self;
 }
@@ -212,18 +226,146 @@ Application *Application_3(const char *name, const char *author, const char *ver
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
 void Application_free(Application *self) {
     if (!self) return;
+    // Caller must return from start/run (worker quiescence) before freeing.
+    if (atomic_load(&(*self).active)) return;
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+    pthread_cond_destroy(&(*self).invokeCondition);
+    pthread_mutex_destroy(&(*self).invokeMutex);
     free(self);
 }
 
+static void *appStartWorker(void *userdata) {
+    Application *self = userdata;
+    for (uint32_t i = 0; i < (*self).startCount && Application_isRunning(self); i++)
+        (*self).startFns[i](self, (*self).startUsers[i]);
+    atomic_store_explicit(&(*self).workerDone, true, memory_order_release);
+    return NULL;
+}
+
+Application *Application_current(void) { return s_current; }
+
+bool Application_begin(Application *self) {
+    if (!self) return false;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&(*self).active, &expected, true)) return false;
+    (*self).ownerThread = pthread_self();
+    atomic_store(&(*self).closeRequested, false);
+    atomic_store(&(*self).workerDone, (*self).startCount == 0);
+    atomic_store(&(*self).running, true);
+    for (uint32_t i = 0; i < (*self).window_count; i++)
+        if (!Window_shouldClose((*self).windows[i])) Window_show((*self).windows[i]);
+    if ((*self).startCount) {
+        if (pthread_create(&(*self).startThread, NULL, appStartWorker, self) != 0) {
+            atomic_store(&(*self).workerDone, true);
+            Application_close(self);
+            Application_finish(self);
+            return false;
+        }
+        (*self).workerLaunched = true;
+    }
+    return true;
+}
+
 void Application_start(Application *self) {
+    if (Application_begin(self)) Application_run(self);
+}
+
+void Application_close(Application *self) {
     if (!self) return;
-    atomic_store_explicit(&(*self).running, true, memory_order_relaxed);
+    atomic_store(&(*self).closeRequested, true);
+    atomic_store(&(*self).running, false);
+    pthread_mutex_lock(&(*self).invokeMutex);
+    pthread_cond_broadcast(&(*self).invokeCondition);
+    pthread_mutex_unlock(&(*self).invokeMutex);
+}
+
+bool Application_addStartEvent(Application *self, ApplicationEventFn fn, void *userdata) {
+    if (!self || !fn || atomic_load(&(*self).active) || (*self).startCount == APP_MAX_EVENTS) return false;
+    uint32_t i = (*self).startCount++;
+    (*self).startFns[i] = fn; (*self).startUsers[i] = userdata;
+    return true;
+}
+
+bool Application_addPollEvent(Application *self, ApplicationEventFn fn, void *userdata) {
+    if (!self || !fn) return false;
+    if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
+    uint32_t empty = APP_MAX_EVENTS;
+    for (uint32_t i = 0; i < APP_MAX_EVENTS; i++) {
+        if ((*self).pollFns[i] == fn && (*self).pollUsers[i] == userdata) return true;
+        if (!(*self).pollFns[i] && empty == APP_MAX_EVENTS) empty = i;
+    }
+    if (empty == APP_MAX_EVENTS) return false;
+    (*self).pollFns[empty] = fn; (*self).pollUsers[empty] = userdata; return true;
+}
+
+bool Application_removePollEvent(Application *self, ApplicationEventFn fn, void *userdata) {
+    if (!self) return false;
+    if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
+    for (uint32_t i = 0; i < APP_MAX_EVENTS; i++)
+        if ((*self).pollFns[i] == fn && (*self).pollUsers[i] == userdata) {
+            (*self).pollFns[i] = NULL; (*self).pollUsers[i] = NULL; return true;
+        }
+    return false;
+}
+
+bool Application_invoke(Application *self, ApplicationEventFn fn, void *userdata) {
+    if (!self || !fn || !Application_isRunning(self)) return false;
+    if (pthread_equal(pthread_self(), (*self).ownerThread)) {
+        Application *previous = s_current; s_current = self;
+        fn(self, userdata); s_current = previous; return true;
+    }
+    pthread_mutex_lock(&(*self).invokeMutex);
+    while ((*self).invokeFn && Application_isRunning(self))
+        pthread_cond_wait(&(*self).invokeCondition, &(*self).invokeMutex);
+    if (!Application_isRunning(self)) { pthread_mutex_unlock(&(*self).invokeMutex); return false; }
+    (*self).invokeFn = fn; (*self).invokeUser = userdata;
+    // Once admitted, wait for completion even if the callback requests close.
+    while ((*self).invokeFn)
+        pthread_cond_wait(&(*self).invokeCondition, &(*self).invokeMutex);
+    pthread_mutex_unlock(&(*self).invokeMutex);
+    return true;
+}
+
+void Application_poll(Application *self) {
+    if (!self || !atomic_load(&(*self).active) || !pthread_equal(pthread_self(), (*self).ownerThread)) return;
+    Application *previous = s_current; s_current = self;
+    pthread_mutex_lock(&(*self).invokeMutex);
+    ApplicationEventFn fn = (*self).invokeExecuting ? NULL : (*self).invokeFn;
+    void *userdata = (*self).invokeUser;
+    if (fn) (*self).invokeExecuting = true;
+    pthread_mutex_unlock(&(*self).invokeMutex);
+    if (fn) {
+        fn(self, userdata);
+        pthread_mutex_lock(&(*self).invokeMutex);
+        (*self).invokeFn = NULL;
+        (*self).invokeExecuting = false;
+        pthread_cond_broadcast(&(*self).invokeCondition);
+        pthread_mutex_unlock(&(*self).invokeMutex);
+    }
+    if (Application_isRunning(self))
+        for (uint32_t i = 0; i < APP_MAX_EVENTS; i++)
+            if ((*self).pollFns[i]) (*self).pollFns[i](self, (*self).pollUsers[i]);
+    s_current = previous;
+}
+
+void Application_finish(Application *self) {
+    if (!self || !atomic_load(&(*self).active) || !pthread_equal(pthread_self(), (*self).ownerThread)) return;
+    Application_close(self);
+    for (uint32_t i = 0; i < (*self).window_count; i++)
+        Window_close((*self).windows[i]);
+    // Drain admitted owner work before joining a worker waiting on that work.
+    while (!atomic_load_explicit(&(*self).workerDone, memory_order_acquire)) {
+        Application_poll(self);
+        Window_pollEvents();
+        struct timespec slice = {0, 1000000}; nanosleep(&slice, NULL);
+    }
+    if ((*self).workerLaunched) { pthread_join((*self).startThread, NULL); (*self).workerLaunched = false; }
+    atomic_store(&(*self).active, false);
 }
 
 void Application_stop(Application *self) {
     if (!self) return;
-    atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
+    Application_close(self);
 }
 
 bool Application_isRunning(const Application *self) {
@@ -249,27 +391,34 @@ bool Application_isFinished(const Application *self) {
 // window is open.
 void Application_run(Application *self) {
     if (!self) return;
+    if (!atomic_load(&(*self).active) && !Application_begin(self)) return;
+    if (!pthread_equal(pthread_self(), (*self).ownerThread)) return;
     while (atomic_load_explicit(&(*self).running, memory_order_relaxed)) {
         if (appAllWindowsClosed(self)) {
             atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
-            return;
+            break;
         }
         appParkSlice(self);
         Application_pollHot(self); // generation-driven hot swap at ~250ms cadence
     }
+    Application_finish(self);
 }
 
 bool Application_addWindow(Application *self, Window *win) {
     if (!self || !win) return false;
+    if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
+    if (atomic_load(&(*self).active) && !Application_isRunning(self)) return false;
     for (uint32_t i = 0; i < (*self).window_count; i++)
         if ((*self).windows[i] == win) return false;
     if ((*self).window_count >= APP_MAX_WINDOWS) return false;
     (*self).windows[(*self).window_count++] = win;
+    (*self).hadWindows = true;
     return true;
 }
 
 bool Application_removeWindow(Application *self, Window *win) {
     if (!self || !win) return false;
+    if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
     for (uint32_t i = 0; i < (*self).window_count; i++) {
         if ((*self).windows[i] == win) {
             (*self).windows[i] = (*self).windows[--(*self).window_count];
@@ -392,4 +541,3 @@ uint32_t Application_getWindows(const Application *self, Window **out, uint32_t 
         out[i] = (*self).windows[i];
     return n;
 }
-

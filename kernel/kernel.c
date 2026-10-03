@@ -556,7 +556,7 @@ static void kernelStartApplication(Kernel *self, Application *a) {
     (void) self;
     if (!a)
         return;
-    Application_start(a);
+    (void) Application_begin(a);
     uint32_t winCount = Application_getWindowCount(a);
     for (uint32_t i = 0; i < winCount; i++) {
         Window *w = Application_getWindow(a, i);
@@ -640,6 +640,8 @@ int Kernel_runAll(Kernel *self) {
         kernelDrainDeferred(self);
 
         Window_pollEvents();
+        for (uint32_t i = 0; i < (*self).applicationCount; i++)
+            Application_poll((*self).applications[i]);
         bridgeBespokeCheck();
 
         char buf[4096];
@@ -679,6 +681,7 @@ int Kernel_runAll(Kernel *self) {
         Application *a = (*self).applications[i];
         if (a && Application_isRunning(a))
             Application_stop(a);
+        Application_finish(a);
     }
     for (uint32_t i = 0; i < (*self).runCount; i++) {
         KernelRunSlot *slot = &(*self).runSlots[i];
@@ -728,6 +731,7 @@ static bool kernelGfxAppContinues(void *context) {
     if (!a)
         return false;
     Application_pollHot(a);
+    Application_poll(a);
     bridgeBespokeCheck();
     return !Application_isFinished(a);
 }
@@ -757,7 +761,9 @@ int Kernel_runApplication(Kernel *self, Application *a) {
     // HERE (R1), the frame loop + Thread-0 event pump stay THERE (R3).
     // Otherwise, fall back to hotcwap's parked loop.
     if ((*self).gfxAppRun != nullptr) {
-        return (*self).gfxAppRun(a, kernelGfxAppContinues, kernelGfxPump);
+        int result = (*self).gfxAppRun(a, kernelGfxAppContinues, kernelGfxPump);
+        Application_finish(a);
+        return result;
     }
 
     bridgeBespoke();

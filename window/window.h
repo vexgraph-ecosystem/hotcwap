@@ -109,6 +109,9 @@ void Window_destroyAll(void);
 // True once the user has asked to close (red button / Cmd+W).
 bool Window_shouldClose(Window *window);
 void Window_setShouldClose(Window *window, bool shouldClose);
+// Owner-thread force-close of the native window; retains the C handle until
+// Window_destroy. Unlike hide, this makes Window_shouldClose true.
+void Window_close(Window *window);
 
 // Drain the OS event queue. Call once per frame from the engine loop.
 void Window_pollEvents(void);

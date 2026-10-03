@@ -5,27 +5,27 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <pthread.h>
 
 #include "hot/hot.h"
 #include "window/window.h"
 
 // kernel/application.h — Executable-level manifest, window registry & hot-module slot.
 //
-// Application is a pure manifest: identity (name/author/version/icon), the
+// Application is a lifetime supervisor: identity (name/author/version/icon), the
 // window registry, and a hot-module slot. Application is GUI by definition —
 // the process taxonomy (the Vertical Integration Law) classifies anything that
 // presents pixels through a Window as an Application; CLI functions become
 // Process, TUI sessions become Console. There is no "mode": a manifest with
 // zero windows is a degenerate (headless-test) Application, nothing more.
 //
-// Application NEVER owns a loop, a tick, or a present worker — the event
-// pump lives in hotcwap's Window (R1), and frame scheduling / presentation
-// lives in graphvex's GfxLoop (R3). Application_start/stop just flip the
-// running flag; the Kernel observes it.
+// Application_start is the blocking lifetime entry. It services native events
+// until ALL registered windows close or Application_close is requested.
+// Start events execute on one supervised worker. Graphics scheduling stays R3.
 //
 // Application_run is the KEEP-ALIVE PARKED LOOP (hotcwap's own, no graphvex):
 // it BLOCKS until every registered window is closed, then ends the app by
-// flipping running=false. It parks at a 250ms cadence, letting the Window
+// flipping running=false. It parks in 5ms slices, letting the Window
 // pump its own events in between — so an empty window lives on its own and
 // Kernel_run(kernel, app) returns only once the user closed all windows.
 //
@@ -40,6 +40,8 @@
 typedef struct Application Application;
 
 typedef void (*AppHotReloadFn)(Application *self, uint32_t loaded, void *userdata);
+typedef void (*ApplicationEventFn)(Application *self, void *userdata);
+#define APP_MAX_EVENTS 16
 
 struct Application {
     char name[APP_MAX_NAME];               // app name (default "vex")
@@ -48,12 +50,26 @@ struct Application {
     char iconPath[APP_MAX_ICON_PATH];      // icon path reference (default "")
     Window *windows[APP_MAX_WINDOWS];      // registered top-level windows
     uint32_t window_count;                 // used slots in windows[]
+    bool hadWindows;                      // removing last window completes lifetime
     _Atomic bool running;                  // runtime active flag (Kernel writes, graphvex reads)
     HotModule *hot;                        // dynamic module watcher (opt-in via Application_setHot)
     _Atomic uint32_t fps;                  // live telemetry: FPS (graphvex writes)
     _Atomic uint32_t frametimeUs;          // live telemetry: frametime in microseconds (graphvex writes)
     AppHotReloadFn hotReloadFn;            // hot-reload notification callback (nullable)
     void *hotReloadUserdata;               // userdata for hotReloadFn
+    ApplicationEventFn startFns[APP_MAX_EVENTS];
+    void *startUsers[APP_MAX_EVENTS];
+    uint32_t startCount;
+    ApplicationEventFn pollFns[APP_MAX_EVENTS]; // owner-thread service bridges
+    void *pollUsers[APP_MAX_EVENTS];
+    pthread_t ownerThread, startThread;
+    _Atomic bool active, closeRequested, workerDone;
+    bool workerLaunched;
+    pthread_mutex_t invokeMutex;
+    pthread_cond_t invokeCondition;
+    ApplicationEventFn invokeFn; // one synchronous worker -> owner mailbox
+    void *invokeUser;
+    bool invokeExecuting;
 };
 
 // --- Subsystem bootstrap & shutdown ---
@@ -86,22 +102,38 @@ Application *Application_3(const char *name, const char *author, const char *ver
 // Free the Application. Registered windows are untouched (OS-owned).
 void Application_free(Application *self);
 
-// --- Lifecycle flags (Kernel-owned, no loop involvement) ---
+// --- Lifecycle (start/run/free on the native owner thread) ---
 void Application_start(Application *self);
+// Nonblocking arm for Kernel's multi-application reactor; false if already active.
+bool Application_begin(Application *self);
+// Service owner callbacks/mailbox; Kernel and Application_run call this.
+void Application_poll(Application *self);
+// Stop, close registered windows on their owner thread, drain/join worker.
+void Application_finish(Application *self);
+// Thread-safe, idempotent close request. Does not destroy borrowed Window handles.
+void Application_close(Application *self);
 void Application_stop(Application *self);
 bool Application_isRunning(const Application *self);
+// Register before starting. Start callbacks run in registration order on a worker.
+bool Application_addStartEvent(Application *self, ApplicationEventFn fn, void *userdata);
+bool Application_addPollEvent(Application *self, ApplicationEventFn fn, void *userdata);
+bool Application_removePollEvent(Application *self, ApplicationEventFn fn, void *userdata);
+// Synchronous owner-thread work; false if closing. Never call while holding UI locks.
+bool Application_invoke(Application *self, ApplicationEventFn fn, void *userdata);
+// Current application on its native owner thread (NULL outside lifecycle).
+Application *Application_current(void);
 
 // --- Completion predicate (drives the Kernel completion reactor) ---
 // True when the app can never end itself: running flipped false (external
-// stop), or window_count > 0 and EVERY registered window reports shouldClose.
-// A windowless manifest (zero windows) is NOT finished by this rule — it
-// lives until an explicit Application_stop, nothing ends it by itself.
+// stop), or EVERY registered window reports shouldClose (including removal of
+// the last previously registered window). An app that has never had windows
+// lives until an explicit close/stop request.
 bool Application_isFinished(const Application *self);
 
 // --- Keep-alive parked loop (hotcwap's own) ---
 // BLOCKS until every registered window is closed (or stop flips running).
-// The Window pumps its own events; this only ASKS closed-state at a 250ms
-// cadence. Empty windows live on their own — no graphvex dependency.
+// The Window pumps native events; spoke input and owner service callbacks run
+// in 5ms slices. Empty windows live on their own — no graphvex dependency.
 void Application_run(Application *self);
 
 // --- Hot-reload drive (generation-driven, _main thread only) ---
