@@ -516,15 +516,9 @@ static CGFloat windowBackingScale(const Window *window);
     if (w) {
         atomic_store_explicit(&(*w).liveResizing, false, memory_order_relaxed);
         windowRefreshSize(w);
-        // Settle rebuild beat: the FINAL drag step ran while the live flag
-        // was still set (it clears HERE, after the last geometry event), so
-        // the resize hook never saw a non-live tick — the frozen drawable
-        // size would persist and the trailing strip never fills. Force one
-        // hook pass with the flag clear: platformSyncLayer commits the new
-        // drawableSize exactly once, the present lands the reactive
-        // OUT_OF_DATE rebuild, and the settle frame chase refills the seam.
-        // The hook's drop ticket re-arms the loop if the rebuild defers the
-        // present one tick.
+        // Final geometry reconciliation only: each live step already publishes
+        // its current extent. The Frame hook no-ops when this size is unchanged;
+        // no frozen drawable, delayed rebuild or mandatory settle frame exists.
         if ((*w).resizeRenderFn)
             (*w).resizeRenderFn((*w).resizeRenderUserdata);
     }
@@ -2175,7 +2169,8 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
             return;
         // ZERO-COPY: the CGImage borrows the caller's buffer directly — no
         // bitmap-context allocation, no pixel copy. The buffer must stay valid
-        // until the layer is done; we flush synchronously during live resize.
+        // until the layer is done; live resize flushes the committed CA updates
+        // but that submission is not a buffer-lifetime completion fence.
         CGDataProviderRef provider =
             CGDataProviderCreateWithData(NULL, pixels, stride * (size_t) height, NULL);
         if (provider == NULL)
@@ -2193,9 +2188,11 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
         [CATransaction setDisableActions:YES];
         view.layer.contents = (__bridge id) img;
         view.layer.contentsGravity = kCAGravityResize;  // stale-step fallback only
+        [CATransaction commit];
+        // Flush submitted changes, not an explicit transaction still open.
+        // This submits CA work; it is not a GPU/WindowServer completion fence.
         if (Window_isLiveResizing(window))
             [CATransaction flush];
-        [CATransaction commit];
         CGImageRelease(img);
     }
 }
@@ -2246,11 +2243,13 @@ void Window_presentSurface(Window *window, void *surface) {
         layer.contentsGravity = kCAGravityResize;
         double scale = (*window).cachedScale > 0.0 ? (*window).cachedScale : 1.0;
         layer.contentsScale = scale;
-        // presentsWithTransaction semantics: mid-drag the frame must land WITH
-        // the resize, so flush synchronously; at rest let CA commit on its own.
+        [CATransaction commit];
+        // This is a CALayer/IOSurface publication, not a CAMetalLayer drawable:
+        // presentsWithTransaction is not available here. Submit the closed
+        // transaction during tracking instead of waiting for the outer pump.
+        // flush does not prove display completion or synchronize a GPU worker.
         if (Window_isLiveResizing(window))
             [CATransaction flush];
-        [CATransaction commit];
     }
 }
 
