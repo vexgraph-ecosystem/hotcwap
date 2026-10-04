@@ -14,31 +14,14 @@ In conventional game architectures, window management and simulation loops are t
 
 * **OS Window Decoupling**: Thread 0 hosts the native platform window (`AppKit` / Cocoa on macOS; X11/Wayland on Linux). The display link, event pump, and surface layer persist indefinitely across module reloads.
 * **Decoupled Window Backend**: A window is a dumb surface + callback bridge (`window/window_cocoa.m`) — pure AppKit, zero Vulkan/Metal. It answers `Window_*` calls from graphvex and R5 apps through the per-window `WindowEvent` lifecycle registry; the GPU-era composite/attach surface is retained as `;;INTENTION` stubs until the darling compositor migrates onto the bridge (the Window Decoupling Law).
-* **Microsecond Dynamic Reloader**: Swaps loaded `.dylib` function pointer dispatch tables with zero frame interruption. `Hot_poll` (`hot/hot.c`) compares the manifest's per-library generation stamp (`bin/current/<library>.generation`) against its last-seen generation; on a move it snapshots the running module state on an off-thread save worker (the Bounded Wait Law), then on the next poll dlopens + fail-closed verifies the whole new set (`VkModuleGetTrampolines` on every section), rehydrates the saved state into the STAGED images BEFORE any commit, then atomically swaps trampolines. A new image whose `Hot_restore` rejects its saved state rolls the whole swap back (#8.5 Automated State Rollback) — the old generation stays live and the stamp never advances, so the next poll self-heals once a fixed set is promoted. The install-ladder authority + `manifest.json` catalog (`hot/manifest.h/.c`) gates what lands in `bin/current/<library>` via the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs — the loader trusts the ladder placement. Vulkan module loading lives in graphvex (`src/vulkan/vk_loader.c`) — hotcwap holds no Vulkan code.
+* **Microsecond Dynamic Reloader**: Swaps loaded `.dylib` function pointer dispatch tables with zero frame interruption. `Hot_poll` (`hot/hot.c`) compares the manifest's per-library generation stamp (`bin/current/<library>.generation`) against its last-seen generation; on a move it snapshots the running module state on an off-thread save worker (the Bounded Wait Law), then on the next poll dlopens + fail-closed verifies the whole new set (`VkModuleGetTrampolines` on every section), rehydrates the saved state into the STAGED images BEFORE any commit, then atomically swaps trampolines. A new image whose `Hot_restore` rejects its saved state rolls the whole swap back (automated state rollback) — the old generation stays live and the stamp never advances, so the next poll self-heals once a fixed set is promoted. The install-ladder authority + `manifest.json` catalog (`hot/manifest.h/.c`) gates what lands in `bin/current/<library>` via the `MANIFEST_UPDATE`/`MANIFEST_PROMOTE` verbs — the loader trusts the ladder placement. Vulkan module loading lives in graphvex (`src/vulkan/vk_loader.c`) — hotcwap holds no Vulkan code.
 * **Low-Latency Event Pump**: Decoupled polling for keyboard, mouse, and touch in bounded 25ms slices (the Bounded Wait Law), mirrored into the vexspoke input rings per-window.
 
 ---
 
 ## Workspace Integration & How to Use It
 
-`hotcwap` sits at R1 Host in the `vexgraph` supervisor order (the Vertical Integration Law: `R1 hotcwap > R2 vexspoke > R3 graphvex/api-haven/language/darkbase > R4 darling-framework/sesh > R5 engines`). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines:
-
-```
-workspace/
-├── cmake-build-debug/           # Out-of-tree CMake build artifacts & staged SPVs
-├── projects/                    # Vertically integrated subsystem repositories
-│   ├── hotcwap/                 # R1 Host: nano-VM (this library)
-│   │   ├── kernel/              # Kernel {arena, transientArena, applications[]} supervisor
-│   │   ├── process/             # Process taxonomy: process, application, console
-│   │   └── window/              # OS window, AppKit Cocoa bridge, event registry
-│   ├── vexspoke/                # R2 Behavior: relational C23 runtime (shapes Kernel borrows)
-│   ├── graphvex/                # R3 Driver: GPU compute, SPIR-V, fonts
-│   ├── darling-framework/       # R4 Interface: UI tree (registers via Application)
-│   ├── api-haven/               # R3 Driver: telemetry/connectors (registers via callbacks)
-│   └── [R5 engines register as Applications: vex-engine, mini-ide, daw, ...]
-├── CMakeLists.txt               # Umbrella workspace orchestrator
-└── preferences.md               # Engine architectural style preferences (Rules 1–n, supreme)
-```
+`hotcwap` sits at **R1 host** in the supervisor order (the Vertical Integration Law). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines. The full ecosystem map lives in the workspace root `README.md` and the ecosystem wiki, not here.
 
 ### Kernel lifecycle (the 7 steps — test_suite order)
 
@@ -53,32 +36,26 @@ Application_free(app);             // 7a. end the application (detach-only)
 Kernel_destroy(k);                 // 7b. end the kernel (stops apps, arenas LAST)
 ```
 
-### 1. In-Tree Integration (Subdirectory)
-When integrated inside an umbrella workspace:
+### Build
 
-```cmake
-# In your top-level CMakeLists.txt
-add_subdirectory(projects/hotcwap)
-
-add_executable(my_app spoke.c)
-target_link_libraries(my_app PRIVATE hotcwap vexspoke)
+```sh
+./tools/b build          # inside the worktree: builds this repo with its graph
+b/b build c .            # standalone: the bundled build system, C adapter
 ```
 
-### 2. Standalone Integration (FetchContent Seam)
-When building standalone or in downstream projects:
+### Standalone autonomy (target seam)
+A downstream repository pulls `hotcwap` only when its target is not already in-tree (the Standalone Autonomy Law):
 
 ```cmake
-if (NOT TARGET hotcwap)
+if(NOT TARGET hotcwap)
     include(FetchContent)
     FetchContent_Declare(
-            hotcwap
-            GIT_REPOSITORY https://github.com/vexgraph-dev/hotcwap.git
-            GIT_TAG spoke
+        hotcwap
+        GIT_REPOSITORY https://github.com/vexgraph-ecosystem/hotcwap.git
+        GIT_TAG spoke
     )
     FetchContent_MakeAvailable(hotcwap)
-endif ()
-
-target_link_libraries(my_app PRIVATE hotcwap)
+endif()
 ```
 
 ---
@@ -102,4 +79,4 @@ target_link_libraries(my_app PRIVATE hotcwap)
 
 * C23 compiler (Clang with `-std=gnu23`).
 * macOS (AppKit, Cocoa) or Linux (X11).
-* CMake $\ge$ 4.3.
+* The workspace build system, `b` (bundled at `b/`).
