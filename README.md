@@ -35,9 +35,22 @@ In conventional game architectures, window management and simulation loops are t
 
 ## Workspace Integration & How to Use It
 
-`hotcwap` sits at **R1 host** in the supervisor order (the Vertical Integration Law). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines. The full ecosystem map lives in the workspace root `README.md` and the ecosystem wiki, not here.
+`hotcwap` sits at **R1 host** in the supervisor order (the Vertical Integration Law). It boots first as Kernel Host, owns the master + transient arenas and the Application registry, and tears down last — depending only on `vexspoke` shapes + `graphvex` GPU types, never on `darling`/`api-haven`/engines. The full ecosystem map lives in the workspace root `../../../README.md` and the ecosystem wiki, not here.
 
-### Kernel lifecycle (the 7 steps — test_suite order)
+### R2 storage boundary
+
+R2 has two cooperating owners: Vexspoke provides CPU computation, math,
+algorithms, synchronization and behavior; Relational Engine owns memory/storage,
+stable row chunks, variable bindings and native C search over Rust-owned spans.
+**R1 owns their lifetimes/residency:** stop admission and active users before
+storage destruction, and keep code/storage resident across consumer reloads.
+Migration is staged. Existing Vexspoke memory/container ABI, default allocator
+and `spoke/lifetime` wiring remain unchanged; this documentation adds no direct
+engine-header dependency, automatic schema migration or live Hot loader
+integration. Never assume C/Rust atomic-layout compatibility. GPU shaders and
+dispatch remain Graphvex R3.
+
+### Kernel lifecycle example
 
 ```c
 Kernel *k = Kernel();              // 1. kernel: master + transient arenas
@@ -83,4 +96,4 @@ configure is not a standalone runtime build.
 
 * C23 compiler (Clang with `-std=gnu23`).
 * macOS (AppKit, Cocoa) or Linux (X11).
-* The workspace build system, `b` (bundled at `b/`).
+* The workspace build system, `b` (bundled at `../../../personal/b`).
