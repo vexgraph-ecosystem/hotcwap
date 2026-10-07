@@ -1,15 +1,15 @@
 # hotcwap — Repo-Local Living Preferences
 > Repo-local preferences governed by the Living Documentation Law.
-> Universal Supreme Constitution: preferences.md (vexspoke).
+> Universal Supreme Constitution: workspace-root preferences.md, published on Gist.
 
 ## 0. Constitution Link (supreme)
-- [preferences.md](https://github.com/vexgraph-ecosystem/vexspoke/blob/main/preferences.md) (canonical, vexspoke) — accessible locally at ../../preferences.md
-- All universal laws in `preferences.md` are mandatory and binding across the ecosystem.
-- This document codifies **exclusive** preferences that apply uniquely to `hotcwap` (R1 Kernel Host).
+- [preferences.md](https://gist.github.com/vex-graph/4132a6c45cb6d3797c3e8eff2e94035a) — real, Git-ignored workspace-root file at ../../../preferences.md, not a tracked Vexspoke file or symlink.
+- All universal laws in `../../../preferences.md` are mandatory and binding across the ecosystem.
+- This document codifies **exclusive** preferences for `hotcwap` (R1 Kernel Host). R2 comprises Vexspoke computation/behavior and Relational Engine memory/storage/native C search. R1 owns lifetimes/residency and must exclude active users before storage destruction. Existing Lifetime/default allocator wiring is unchanged; no direct engine-header dependency, automatic schema migration or live engine reload integration is implied.
 
 ## 1. Repo-Local Law Index (Binding Matrix)
 
-Universal laws are inherited from the canonical `preferences.md` Index; this table indexes the additional laws specific to this repository.
+Universal laws are inherited from the canonical `../../../preferences.md` Index; this table indexes the additional laws specific to this repository.
 
 | Law Title | Scope | Enforcement |
 | :--- | :--- | :--- |
@@ -131,4 +131,4 @@ Live reloading without ABI validation causes memory misalignment and crashes whe
 
 ## 4. Readiness Cross-Reference (Living Documentation Law)
 
-- Feature readiness matrix tracked in [`../../_repositories/.ecosystem/hotcwap.md`](../../_repositories/.ecosystem/hotcwap.md) (rendered as `[[hotcwap]]` wiki page).
+- Feature readiness matrix: [hotcwap](../../ecosystem/hotcwap.md), rendered as `[[hotcwap]]`.
