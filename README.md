@@ -1,5 +1,19 @@
 # hotcwap. hot-c-wap. R1 Host Supervisor — thin nano-VM.
 
+## CLion: CMake is IDE metadata only
+
+Open this repository root as a CMake project. `CMakeLists.txt` provides C23
+and host-platform Objective-C source targets, include paths and flags for
+navigation, diagnostics and inlay hints. Targets are excluded from the default
+build; no linking, dependency downloads or application runner are wired into it.
+Set `VEXSPOKE_SOURCE_DIR` and `GRAPHVEX_SOURCE_DIR` to local `src/` checkouts.
+Missing headers stay real IDE errors; no fake declarations are generated.
+IDE appearance is user-verified; untested platform backends remain unproved.
+
+Build with [b](https://github.com/vex-graph/b), not this adapter. From the
+Vexgraph workspace root: `./tools/b build hotcwap`. IDE metadata does not prove
+runtime ownership, hot reload or standalone dependency closure.
+
 Zero-downtime dynamic module hot-reloading, persistent OS windowing, and process supervision.
 
 A play on the term **hot swap** — `hotcwap` is an infrastructure runtime designed to reload compiled C23 dynamic libraries in real-time without restarting the process, losing application state, or destroying the native operating system window.
@@ -39,24 +53,14 @@ Kernel_destroy(k);                 // 7b. end the kernel (stops apps, arenas LAS
 ### Build
 
 ```sh
-./tools/b build          # inside the worktree: builds this repo with its graph
-b/b build c .            # standalone: the bundled build system, C adapter
+./tools/b build hotcwap # from the Vexgraph workspace root
 ```
 
-### Standalone autonomy (target seam)
-A downstream repository pulls `hotcwap` only when its target is not already in-tree (the Standalone Autonomy Law):
-
-```cmake
-if(NOT TARGET hotcwap)
-    include(FetchContent)
-    FetchContent_Declare(
-        hotcwap
-        GIT_REPOSITORY https://github.com/vexgraph-ecosystem/hotcwap.git
-        GIT_TAG spoke
-    )
-    FetchContent_MakeAvailable(hotcwap)
-endif()
-```
+### Standalone autonomy
+The Standalone Autonomy Law still requires runtime dependency closure. This
+IDE-only adapter exports no runtime library and never fetches dependencies;
+supply local headers through its dependency-path options. A successful IDE
+configure is not a standalone runtime build.
 
 ---
 
