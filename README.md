@@ -1,5 +1,30 @@
 # hotcwap. hot-c-wap. R1 Host Supervisor — thin nano-VM.
 
+## Current State
+
+hotcwap is the **R1 host supervisor** — the process that boots first and tears
+down last, owning the OS window and the dynamic-module reloader. It is a real
+runtime with a working macOS backend, not a finished multi-platform host.
+
+- **Implemented:** the `Kernel` (master + transient arenas; process / application
+  / console registries), the three process kinds, the hot-reload path (`hot/*`:
+  `dlopen`/`dlsym` trampolines, the retire ring, the `manifest.json` install
+  ladder), and the window abstraction with the macOS AppKit backend
+  (`window/window_cocoa.m`) proven on this host.
+- **Recorded proof is partial.** Only a minority of hotcwap files carry executed
+  evidence in `tests/test-checklist.md`. Owner tests exist under `tests/hotcwap/`
+  (loader, kernel, window families), but most rows are still **unrecorded** — a
+  green `b build` plus the presence of owner tests is not the same as recorded
+  per-file evidence.
+- **Draft / unproven:** the Linux X11, Wayland and Win32 window backends
+  (`window_linux.c`, `window_wayland.c`, `window_win32.c`) are drafts that need
+  their own host to compile and are explicitly unproven on macOS. Live Hot-loader
+  integration with Relational Engine storage, and rollback-tested schema
+  upgrades, remain future proof; `spoke/lifetime` wiring is preserved, not
+  automatic. No C/Rust atomic-layout compatibility is assumed.
+- **Platforms:** proven on Apple Silicon macOS 14+ only. Linux and Windows host
+  backends are unproven here.
+
 ## CLion: CMake is IDE metadata only
 
 Open this repository root as a CMake project. `CMakeLists.txt` provides C23
@@ -97,3 +122,19 @@ configure is not a standalone runtime build.
 * C23 compiler (Clang with `-std=gnu23`).
 * macOS (AppKit, Cocoa) or Linux (X11).
 * The workspace build system, `b` (bundled at `../../../personal/b`).
+
+## Scope and Limitations
+
+hotcwap is the R1 layer only. It deliberately does not do the following:
+
+- **It owns no renderer.** Vulkan lives in graphvex; the window is a dumb
+  surface + callback bridge — `window/window_cocoa.m` is pure AppKit, zero
+  Vulkan/Metal. The composite/attach surface is retained as `;;INTENTION` stubs
+  until the darling compositor migrates onto the bridge.
+- **It includes no `darling`/`api-haven`/engine headers** — only vexspoke shapes
+  and graphvex GPU types.
+- **It claims no multi-platform proof.** macOS is proven; the Linux X11 backend
+  is a fallback, and the Wayland and Win32 backends are drafts pending their own
+  hosts.
+- **It is not a standalone runtime through the IDE adapter.** The CMake project
+  is metadata only; real builds use `b`.
