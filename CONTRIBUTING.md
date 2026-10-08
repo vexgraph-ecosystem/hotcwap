@@ -6,7 +6,8 @@ It serves as an architectural manifesto for **R1 Host Supervision and OS Windowi
 hot-reloading modules and managing lifetimes. R2 comprises Vexspoke CPU
 computation/behavior and Relational Engine memory/storage/native C search. R1
 keeps storage/code resident and excludes active users before destruction; current
-Lifetime/default allocator wiring is unchanged and engine reload remains unproved.
+Lifetime wiring is preserved; default native IO/NIO is now RE-owned and linked.
+Native C semantics are preserved, not rewritten into Rust; engine reload is unproved.
 
 ---
 
