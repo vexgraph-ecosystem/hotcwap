@@ -18,9 +18,9 @@
 // wl_keyboard/wl_touch listeners mirror OS state into C-visible words exactly
 // the way the AppKit delegate notifications do, and input routes into the
 // vexspoke Key/Mouse/Touch rings. There is NO Vulkan, NO swapchain and NO
-// present worker here — rendering is the render repos' job and reaches the
+// present worker here — rendering is the render personal' job and reaches the
 // screen through the software present seam (a lean wl_shm path mirroring the
-// retired raster present) or, once Migrates, the render repos' own surfaces.
+// retired raster present) or, once Migrates, the render personal' own surfaces.
 // A Window is a dumb surface + callback bridge per the Window Decoupling Law.
 //
 // The GPU-era composite surface (boards, panes, worker present) is retained
@@ -132,7 +132,7 @@
  *   int frameW, frameH;                // retained shm staging size in px
  *   struct wl_buffer *shmBuffer;       // retained staging buffer (rebuilt on size)
  *   void *shmMap;                      // retained pool mapping (the staging target)
- *   size_t shmSize;                    // current pool capacity in bytes
+ *   size_t shmSize;                    // current pool capacity in Bytes
  *   WindowResizeRenderFn resizeRenderFn;   // resize-cadence render hook
  *   void *resizeRenderUserdata;        // hook userdata
  *
@@ -304,7 +304,7 @@
             "dialect of the Cocoa per-window delegate.")
 ;;INTENTION("Window_present is a genuinely lean Wayland path: a retained "
             "wl_shm pool + buffer rebuilt on size change, stamping the RGBA "
-            "frame (Buffer layout, bytes straight off the uint64 element "
+            "frame (Buffer layout, Bytes straight off the uint64 element "
             "array) into a mapped ARGB8888 pool and committing the surface. "
             "Straight alpha: the compositor blends against the desktop, "
             "mirroring the transparent swapchain ask.")
@@ -1277,7 +1277,7 @@ static uint32_t sShmNameSeq = 0;
 // holding the old buffer; the pool object dies right after the buffer is
 // created (the buffer keeps the pool's memory alive server-side).
 static bool windowEnsureShm(Window *window, int w, int h) {
-    size_t bytes = (size_t) w * (size_t) h * 4u;
+    size_t Bytes = (size_t) w * (size_t) h * 4u;
     if ((*window).shmBuffer && (*window).frameW == w && (*window).frameH == h)
         return (*window).shmMap != nullptr;
     if ((*window).shmBuffer) {
@@ -1290,7 +1290,7 @@ static bool windowEnsureShm(Window *window, int w, int h) {
     }
     (*window).frameW = w;
     (*window).frameH = h;
-    (*window).shmSize = bytes;
+    (*window).shmSize = Bytes;
 
     char name[64];
     snprintf(name, sizeof(name), "/vexgraph-shm-%u", sShmNameSeq++);
@@ -1300,16 +1300,16 @@ static bool windowEnsureShm(Window *window, int w, int h) {
     if (fd == -1)
         return false;
     shm_unlink(name); // the fd keeps the mapping alive; no name left behind
-    if (ftruncate(fd, (off_t) bytes) == -1) {
+    if (ftruncate(fd, (off_t) Bytes) == -1) {
         close(fd);
         return false;
     }
-    void *map = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *map = mmap(nullptr, Bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (map == MAP_FAILED) {
         close(fd);
         return false;
     }
-    struct wl_shm_pool *pool = wl_shm_create_pool(gShm, fd, (int) bytes);
+    struct wl_shm_pool *pool = wl_shm_create_pool(gShm, fd, (int) Bytes);
     (*window).shmBuffer = wl_shm_pool_create_buffer(pool, 0,
         w, h, w * 4, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool); // keep only the buffer alive
@@ -1478,9 +1478,9 @@ void Window_setShouldClose(Window *window, bool shouldClose) {
 
 void Window_close(Window *window) {
     if (!window) return;
-    if ((*window).topLevel) { xdg_toplevel_destroy((*window).topLevel); (*window).topLevel = NULL; }
-    if ((*window).xdgSurface) { xdg_surface_destroy((*window).xdgSurface); (*window).xdgSurface = NULL; }
-    if ((*window).surface) { wl_surface_destroy((*window).surface); (*window).surface = NULL; }
+    if ((*window).topLevel) { xdg_toplevel_destroy((*window).topLevel); (*window).topLevel = nullptr; }
+    if ((*window).xdgSurface) { xdg_surface_destroy((*window).xdgSurface); (*window).xdgSurface = nullptr; }
+    if ((*window).surface) { wl_surface_destroy((*window).surface); (*window).surface = nullptr; }
     atomic_store_explicit(&(*window).shouldClose, true, memory_order_relaxed);
 }
 
@@ -1562,7 +1562,7 @@ void *Window_getTopLayer(const Window *window) {
 
 // ;;INTENTION("Pane/board compositing is inert on the lean window (the same
 // slice the Cocoa backend keeps inert); pane work migrates to the render
-// repos' own pass. Retires together with the composite seam.")
+// personal' own pass. Retires together with the composite seam.")
 bool Window_attachPanes(Window *window, Panel *panel, int width, int height) {
     (void) window;
     (void) panel;
@@ -2058,7 +2058,7 @@ bool Window_present(Window *window, const Buffer *frame) {
     if (!windowEnsureShm(window, (int) fw, (int) fh))
         return false;
 
-    // Stamp the Buffer payload (bytes straight off the uint64 element array)
+    // Stamp the Buffer payload (Bytes straight off the uint64 element array)
     // into the mapped ARGB8888 pool. Straight alpha: the compositor blends it
     // against the desktop — the transparent-swapchain ask, honored for free.
     const unsigned char *src = (const unsigned char*) (*frame).data;

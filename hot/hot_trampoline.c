@@ -88,8 +88,8 @@ int HotTrampolineTable_register(HotTrampolineTable *self, const char *name) {
     HotTrampoline *row = &(*self).rows[idx];
     strncpy((*row).name, name, HOT_MANIFEST_MAX_NAME - 1);
     (*row).name[HOT_MANIFEST_MAX_NAME - 1] = '\0';
-    atomic_store(&(*row).ptr, NULL);
-    atomic_store(&(*row).fallback_ptr, NULL);
+    atomic_store(&(*row).ptr, nullptr);
+    atomic_store(&(*row).fallback_ptr, nullptr);
     return (int)idx;
 }
 
@@ -122,8 +122,8 @@ int HotTrampolineTable_find(HotTrampolineTable *self, const char *name) {
 ;;GETTER
 // Get a row's current function pointer, falling back to prior generation on mid-swap NULL.
 void *HotTrampolineTable_get(HotTrampolineTable *self, int idx) {
-    if (!self) return NULL;
-    if (idx < 0 || idx >= (int)atomic_load(&(*self).count)) return NULL;
+    if (!self) return nullptr;
+    if (idx < 0 || idx >= (int)atomic_load(&(*self).count)) return nullptr;
     HotTrampoline *row = &(*self).rows[idx];
     void *ptr = atomic_load(&(*row).ptr);
     if (!ptr) {

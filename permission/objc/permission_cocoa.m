@@ -307,7 +307,7 @@ bool permissionBackendRequest(PermissionKind kind) {
             const void *keys[] = { (const void*) kAXTrustedCheckOptionPrompt };
             const void *values[] = { (const void*) kCFBooleanTrue };
             CFDictionaryRef options = CFDictionaryCreate(
-                NULL, keys, values, 1,
+                nullptr, keys, values, 1,
                 &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
             bool trusted = AXIsProcessTrustedWithOptions(options);
             CFRelease(options);
@@ -331,7 +331,7 @@ bool permissionBackendRequiresRestart(PermissionKind kind) {
 }
 
 bool permissionBackendOpenSettings(PermissionKind kind) {
-    const char *pane = NULL;
+    const char *pane = nullptr;
     switch (kind) {
         case PERMISSION_SCREEN_CAPTURE: pane = "Privacy_ScreenCapture"; break;
         case PERMISSION_KEY_LISTEN:     pane = "Privacy_ListenEvent"; break;
@@ -352,11 +352,11 @@ bool permissionBackendOpenSettings(PermissionKind kind) {
                      "x-apple.systempreferences:com.apple.preference.security?%s", pane);
     if (n <= 0 || (size_t) n >= sizeof url)
         return false;
-    CFURLRef cfUrl = CFURLCreateWithBytes(NULL, (const UInt8*) url, (CFIndex) n,
-                                          kCFStringEncodingUTF8, NULL);
+    CFURLRef cfUrl = CFURLCreateWithBytes(nullptr, (const UInt8*) url, (CFIndex) n,
+                                          kCFStringEncodingUTF8, nullptr);
     if (!cfUrl)
         return false;
-    OSStatus status = LSOpenCFURLRef(cfUrl, NULL);
+    OSStatus status = LSOpenCFURLRef(cfUrl, nullptr);
     CFRelease(cfUrl);
     return status == noErr;
 }

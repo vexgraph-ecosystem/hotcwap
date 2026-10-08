@@ -81,7 +81,7 @@
 // Encapsulates R2 ChunkedList storage behind R1's Throwable_* API.
 // Conforms strictly to Preference 47 (No Artificial Limits) and the Vertical Integration Law:
 // R1 owns the lifetime and policy, using R2's never-moved chunk storage underneath.
-static ChunkedList *s_teardownList = NULL;
+static ChunkedList *s_teardownList = nullptr;
 static bool s_defaultTeardownRegistered = false;
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
@@ -96,37 +96,37 @@ static void Throwable_ensureDefaultTeardown(void) {
 }
 
 void Throwable_registerTeardown(ThrowableTeardownFn fn) {
-    if (fn == NULL) return;
+    if (fn == nullptr) return;
 
-    if (s_teardownList == NULL) {
+    if (s_teardownList == nullptr) {
         s_teardownList = ChunkedList_3(ID_BIT64, sizeof(ThrowableTeardownFn), VEX_CHUNKED_BYTES_DEFAULT);
-        if (s_teardownList == NULL) return;
+        if (s_teardownList == nullptr) return;
     }
 
     // Deduplicate: check if already registered
     uint32_t count = ChunkedList_size(s_teardownList);
     for (uint32_t i = 0; i < count; i++) {
         ThrowableTeardownFn *slot = (ThrowableTeardownFn *)ChunkedList_slot(s_teardownList, i);
-        if (slot != NULL && *slot == fn) {
+        if (slot != nullptr && *slot == fn) {
             return; // Already registered
         }
     }
 
     // Allocate next never-moved slot in ChunkedList
     ThrowableTeardownFn *slot = (ThrowableTeardownFn *)ChunkedList_addSlot(s_teardownList);
-    if (slot != NULL) {
+    if (slot != nullptr) {
         *slot = fn;
     }
 }
 
 void Throwable_unregisterTeardown(ThrowableTeardownFn fn) {
-    if (fn == NULL || s_teardownList == NULL) return;
+    if (fn == nullptr || s_teardownList == nullptr) return;
 
     uint32_t count = ChunkedList_size(s_teardownList);
     for (uint32_t i = 0; i < count; i++) {
         ThrowableTeardownFn *slot = (ThrowableTeardownFn *)ChunkedList_slot(s_teardownList, i);
-        if (slot != NULL && *slot == fn) {
-            *slot = NULL; // Tombstone without disturbing other slots
+        if (slot != nullptr && *slot == fn) {
+            *slot = nullptr; // Tombstone without disturbing other slots
             return;
         }
     }
@@ -134,19 +134,19 @@ void Throwable_unregisterTeardown(ThrowableTeardownFn fn) {
 
 void Throwable_runTeardown(void) {
     Throwable_ensureDefaultTeardown();
-    if (s_teardownList != NULL) {
+    if (s_teardownList != nullptr) {
         uint32_t count = ChunkedList_size(s_teardownList);
         // Execute teardown callbacks in LIFO order (last registered first)
         for (uint32_t i = count; i > 0; i--) {
             ThrowableTeardownFn *slot = (ThrowableTeardownFn *)ChunkedList_slot(s_teardownList, i - 1);
-            if (slot != NULL && *slot != NULL) {
+            if (slot != nullptr && *slot != nullptr) {
                 ThrowableTeardownFn fn = *slot;
-                *slot = NULL; // Prevent double invocation
+                *slot = nullptr; // Prevent double invocation
                 fn();
             }
         }
         ChunkedList_free(s_teardownList);
-        s_teardownList = NULL;
+        s_teardownList = nullptr;
     }
     s_defaultTeardownRegistered = false;
 }
@@ -161,7 +161,7 @@ _Noreturn void Throwable_throw(ExceptionCategory category,
     Exception ex;
     Exception_init(&ex, category, site, file, line, "%s", msg ? msg : "");
 
-    if (details_fmt != NULL && details_fmt[0] != '\0') {
+    if (details_fmt != nullptr && details_fmt[0] != '\0') {
         va_list args;
         va_start(args, details_fmt);
         Exception_setDetailsV(&ex, details_fmt, args);
@@ -195,7 +195,7 @@ bool Throwable_tryCatch(bool condition,
     Exception ex;
     Exception_init(&ex, category, site, file, line, "%s", msg ? msg : "");
 
-    if (details_fmt != NULL && details_fmt[0] != '\0') {
+    if (details_fmt != nullptr && details_fmt[0] != '\0') {
         va_list args;
         va_start(args, details_fmt);
         Exception_setDetailsV(&ex, details_fmt, args);
@@ -208,7 +208,7 @@ bool Throwable_tryCatch(bool condition,
             line,
             msg ? msg : "");
     fprintf(stderr, "  Category: %s\n", Exception_categoryName(category));
-    if (ex.details != NULL && ex.details[0] != '\0') {
+    if (ex.details != nullptr && ex.details[0] != '\0') {
         fprintf(stderr, "  Details:  %s\n", ex.details);
     }
     fprintf(stderr, "  -> Recovery: Grace given, execution continuing.\n\n");

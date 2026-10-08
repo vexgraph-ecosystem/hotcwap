@@ -89,7 +89,7 @@
  *   HotSaveSlot (per-section state blob captured off-thread):
  *     char name[HOT_MANIFEST_MAX_NAME];  // section stem the blob belongs to
  *     uint8_t buf[HOT_SAVE_SLOT_CAP];    // module Hot_save payload (4 KiB)
- *     size_t len;                        // valid bytes in buf
+ *     size_t len;                        // valid Bytes in buf
  *
  *   HotStagedSection (verify-phase staging, transient inside perform_swap):
  *     HotModuleInternal *mod;   // resolved slot (created if new)
@@ -233,7 +233,7 @@ static HotModuleInternal *find_module(HotModule *hot, const char *name) {
         if (strcmp((*hot).modules[i].name, name) == 0)
             return &(*hot).modules[i];
     }
-    return NULL;
+    return nullptr;
 }
 
 // Off-thread state-save worker (HOT_SAVE_WAIT_NS cond-wait cycle, cancel-aware).
@@ -242,28 +242,28 @@ static void *save_worker_main(void *arg);
 // CONSTRUCTORS (PUBLIC & PRIVATE)
 HotModule *Hot_init(const char *library) {
     if (!library || *library == '\0')
-        return NULL;
+        return nullptr;
     if (strlen(library) >= HOT_MANIFEST_MAX_NAME)
-        return NULL;
+        return nullptr;
     if (!MANIFEST_ROOT())
-        return NULL; // manifest must be mounted before the loader binds
+        return nullptr; // manifest must be mounted before the loader binds
 
     HotModule *hot = (HotModule*) calloc(1, sizeof(HotModule));
     if (!hot)
-        return NULL;
+        return nullptr;
 
     strncpy((*hot).library, library, HOT_MANIFEST_MAX_NAME - 1);
     (*hot).library[HOT_MANIFEST_MAX_NAME - 1] = '\0';
 
-    pthread_mutex_init(&(*hot).saveLock, NULL);
-    pthread_cond_init(&(*hot).saveCond, NULL);
-    (*hot).saveWorkerLive = (pthread_create(&(*hot).saveThread, NULL,
+    pthread_mutex_init(&(*hot).saveLock, nullptr);
+    pthread_cond_init(&(*hot).saveCond, nullptr);
+    (*hot).saveWorkerLive = (pthread_create(&(*hot).saveThread, nullptr,
                                             save_worker_main, hot) == 0);
     if (!(*hot).saveWorkerLive) {
         pthread_mutex_destroy(&(*hot).saveLock);
         pthread_cond_destroy(&(*hot).saveCond);
         free(hot);
-        return NULL;
+        return nullptr;
     }
     return hot;
 }
@@ -282,7 +282,7 @@ static void save_worker_shutdown(HotModule *hot) {
     (*hot).saveRequested = false;
     pthread_cond_signal(&(*hot).saveCond);
     pthread_mutex_unlock(&(*hot).saveLock);
-    pthread_join((*hot).saveThread, NULL);
+    pthread_join((*hot).saveThread, nullptr);
     (*hot).saveWorkerLive = false;
 }
 
@@ -302,7 +302,7 @@ void HotShutdown(HotModule *hot) {
             if (shutdown)
                 shutdown();
             dlclose((*mod).handle);
-            (*mod).handle = NULL;
+            (*mod).handle = nullptr;
             (*mod).loaded = false;
         }
     }
@@ -365,7 +365,7 @@ static void *save_worker_main(void *arg) {
         }
     }
     pthread_mutex_unlock(&(*hot).saveLock);
-    return NULL;
+    return nullptr;
 }
 
 // Ask the worker to snapshot the CURRENT generation's state. Returns true
@@ -375,7 +375,7 @@ static bool snapshot_begin(HotModule *hot) {
     bool any = false;
     for (uint32_t i = 0; i < (*hot).module_count && !any; i++) {
         HotModuleInternal *mod = &(*hot).modules[i];
-        if ((*mod).loaded && (*mod).handle && dlsym((*mod).handle, "Hot_save") != NULL)
+        if ((*mod).loaded && (*mod).handle && dlsym((*mod).handle, "Hot_save") != nullptr)
             any = true;
     }
     if (!any)
@@ -459,7 +459,7 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
     HotStagedSection staged[HOT_MAX_MODULES];
     uint32_t stagedCount = 0;
     struct dirent *ent;
-    while ((ent = readdir(dir)) != NULL) {
+    while ((ent = readdir(dir)) != nullptr) {
         const char *name = (*ent).d_name;
         size_t nlen = strlen(name);
         bool is_dylib = (nlen > 6 && strcmp(name + nlen - 6, ".dylib") == 0) ||
@@ -553,7 +553,7 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
             mod = &(*hot).modules[(*hot).module_count++];
             strncpy((*mod).name, mod_name, HOT_MANIFEST_MAX_NAME - 1);
             (*mod).name[HOT_MANIFEST_MAX_NAME - 1] = '\0';
-            (*mod).handle = NULL;
+            (*mod).handle = nullptr;
             (*mod).loaded = false;
         }
 
@@ -582,7 +582,7 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
     // and re-attempts once the payload is fixed.
     for (size_t i = 0; i < (*hot).saveCount; i++) {
         HotSaveSlot *slot = &(*hot).saveSlots[i];
-        HotStagedSection *match = NULL;
+        HotStagedSection *match = nullptr;
         for (uint32_t k = 0; k < stagedCount; k++) {
             if (strcmp((*staged[k].mod).name, (*slot).name) == 0)
                 match = &staged[k];
@@ -612,9 +612,9 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
                 dlclose(staged[k].handle); // never adopted — safe to close directly
             (*hot).saveCount = 0;
             snprintf((*hot).last_error, sizeof((*hot).last_error),
-                     "Restore rejected by %s (%zu bytes) — generation %llu stays live",
+                     "Restore rejected by %s (%zu Bytes) — generation %llu stays live",
                      (*slot).name, (*slot).len, (unsigned long long) (*hot).generation);
-            fprintf(stderr, "[hot] ROLLBACK: %s rejected restored state (%zu bytes) — "
+            fprintf(stderr, "[hot] ROLLBACK: %s rejected restored state (%zu Bytes) — "
                             "keeping generation %llu live, generation NOT advanced\n",
                     (*slot).name, (*slot).len, (unsigned long long) (*hot).generation);
             return HOT_ERROR_RESTORE_FAILED;
@@ -757,12 +757,12 @@ bool Hot_migrate_module(HotModule *hot, const char *module_name, const char *old
 ;;GETTER
 HotFn Hot_get_symbol(HotModule *hot, const char *name) {
     if (!hot || !name)
-        return NULL;
+        return nullptr;
 
     HotTrampolineTable *table = &(*hot).trampolines;
     int tidx = HotTrampolineTable_find(table, name);
     if (tidx < 0)
-        return NULL;
+        return nullptr;
 
     return (HotFn) HotTrampolineTable_get(table, tidx);
 }

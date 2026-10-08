@@ -28,7 +28,7 @@
  * registered kind to its own run method, allowing dynamic module swapping without
  * supervisor restarts.
  *
- * Memory layout comprises master and transient arena handles, fixed-capacity
+ * memory layout comprises master and transient arena handles, fixed-capacity
  * arrays for windowed applications, one-shot processes, and interactive consoles,
  * alongside a thread-safe deferred-add mailbox and supervised worker run slots.
  *
@@ -200,13 +200,13 @@ Kernel *Kernel_1(size_t arenaBytes) {
 Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     Kernel *self = (Kernel*) calloc(1, sizeof(Kernel));
     if (!self)
-        return NULL;
+        return nullptr;
     // Create the Lifetime memory substrate directly via vexspoke's MemoryArena.
     Lifetime lt = Lifetime_create(arenaBytes, transientBytes);
     if (!Lifetime_isValid(&lt)) {
         Lifetime_destroy(&lt);
         free(self);
-        return NULL;
+        return nullptr;
     }
     (*self).lifetime = lt;
     (*self).arena = lt.persistentArena;
@@ -216,18 +216,18 @@ Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     (*self).applicationCount = 0;
     (*self).processCount = 0;
     (*self).consoleCount = 0;
-    (*self).runSlots = NULL;
+    (*self).runSlots = nullptr;
     (*self).runCount = 0;
     (*self).runCap = 0;
-    (*self).endSlots = NULL;
+    (*self).endSlots = nullptr;
     (*self).endCount = 0;
     (*self).endCap = 0;
     atomic_store_explicit(&(*self).endHooksFired, false, memory_order_relaxed);
     atomic_store_explicit(&(*self).phase, KERNEL_PHASE_READY, memory_order_relaxed);
     atomic_store_explicit(&(*self).running, false, memory_order_relaxed);
     atomic_store_explicit(&(*self).runThreadId, (uintptr_t) 0, memory_order_relaxed);
-    pthread_mutex_init(&(*self).addLock, NULL);
-    (*self).deferred = NULL;
+    pthread_mutex_init(&(*self).addLock, nullptr);
+    (*self).deferred = nullptr;
     (*self).deferredCount = 0;
     (*self).deferredCap = 0;
     return self;
@@ -259,19 +259,19 @@ bool Kernel_free(Kernel *self) {
     for (uint32_t i = 0; i < (*self).runCount; i++) {
         KernelRunSlot *slot = &(*self).runSlots[i];
         if (atomic_load_explicit(&(*slot).threadLaunched, memory_order_relaxed)) {
-            pthread_join((*slot).thread, NULL);
+            pthread_join((*slot).thread, nullptr);
             atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
         }
     }
     kernelFireEndHooks(self);
 
     free((*self).runSlots);
-    (*self).runSlots = NULL;
+    (*self).runSlots = nullptr;
     (*self).runCount = 0;
     (*self).runCap = 0;
 
     free((*self).endSlots);
-    (*self).endSlots = NULL;
+    (*self).endSlots = nullptr;
     (*self).endCount = 0;
     (*self).endCap = 0;
 
@@ -282,23 +282,23 @@ bool Kernel_free(Kernel *self) {
     // holds the GfxLoop registration, not by the supervisor.
     pthread_mutex_destroy(&(*self).addLock);
     free((*self).deferred);
-    (*self).deferred = NULL;
+    (*self).deferred = nullptr;
     (*self).deferredCount = 0;
     (*self).deferredCap = 0;
 
     for (uint32_t i = 0; i < KERNEL_MAX_APPS; i++)
-        (*self).applications[i] = NULL;
+        (*self).applications[i] = nullptr;
     (*self).applicationCount = 0;
     for (uint32_t i = 0; i < KERNEL_MAX_PROCS; i++)
-        (*self).processes[i] = NULL;
+        (*self).processes[i] = nullptr;
     (*self).processCount = 0;
     for (uint32_t i = 0; i < KERNEL_MAX_CONSOLES; i++)
-        (*self).consoles[i] = NULL;
+        (*self).consoles[i] = nullptr;
     (*self).consoleCount = 0;
 
-    (*self).transientArena = NULL;
+    (*self).transientArena = nullptr;
     (*self).transientArenaType = 0;
-    (*self).arena = NULL;
+    (*self).arena = nullptr;
     (*self).arenaType = 0;
     Lifetime_destroy(&(*self).lifetime);
     free(self);
@@ -377,7 +377,7 @@ static void *kernelRunWorkerMain(void *arg) {
     if (slot) {
         atomic_store_explicit(&(*slot).done, true, memory_order_relaxed);
     }
-    return NULL;
+    return nullptr;
 }
 
 // --- REGISTRY INTERNALS + DEFERRED MAILBOX -----------------------------------
@@ -495,7 +495,7 @@ static void kernelDrainDeferred(Kernel *self) {
     pthread_mutex_lock(&(*self).addLock);
     KernelDeferred *batch = (*self).deferred;
     size_t n = (*self).deferredCount;
-    (*self).deferred = NULL;
+    (*self).deferred = nullptr;
     (*self).deferredCount = 0;
     (*self).deferredCap = 0;
     pthread_mutex_unlock(&(*self).addLock);
@@ -515,7 +515,7 @@ static void kernelDropDeferred(Kernel *self) {
     pthread_mutex_lock(&(*self).addLock);
     KernelDeferred *batch = (*self).deferred;
     size_t n = (*self).deferredCount;
-    (*self).deferred = NULL;
+    (*self).deferred = nullptr;
     (*self).deferredCount = 0;
     (*self).deferredCap = 0;
     pthread_mutex_unlock(&(*self).addLock);
@@ -611,7 +611,7 @@ int Kernel_runAll(Kernel *self) {
     for (uint32_t i = 0; i < (*self).runCount; i++) {
         KernelRunSlot *slot = &(*self).runSlots[i];
         atomic_store_explicit(&(*slot).done, false, memory_order_relaxed);
-        if (pthread_create(&(*slot).thread, NULL, kernelRunWorkerMain, slot) == 0) {
+        if (pthread_create(&(*slot).thread, nullptr, kernelRunWorkerMain, slot) == 0) {
             atomic_store_explicit(&(*slot).threadLaunched, true, memory_order_relaxed);
         } else {
             atomic_store_explicit(&(*slot).done, true, memory_order_relaxed);
@@ -665,7 +665,7 @@ int Kernel_runAll(Kernel *self) {
             }
         }
 
-        nanosleep(&park, NULL);
+        nanosleep(&park, nullptr);
         pass++;
     }
 
@@ -686,7 +686,7 @@ int Kernel_runAll(Kernel *self) {
     for (uint32_t i = 0; i < (*self).runCount; i++) {
         KernelRunSlot *slot = &(*self).runSlots[i];
         if (atomic_load_explicit(&(*slot).threadLaunched, memory_order_relaxed)) {
-            pthread_join((*slot).thread, NULL);
+            pthread_join((*slot).thread, nullptr);
             atomic_store_explicit(&(*slot).threadLaunched, false, memory_order_relaxed);
         }
     }
@@ -798,7 +798,7 @@ bool Kernel_removeApplication(Kernel *self, Application *app) {
     for (uint32_t i = 0; i < (*self).applicationCount; i++) {
         if ((*self).applications[i] == app) {
             (*self).applications[i] = (*self).applications[--(*self).applicationCount];
-            (*self).applications[(*self).applicationCount] = NULL;
+            (*self).applications[(*self).applicationCount] = nullptr;
             return true;
         }
     }
@@ -829,7 +829,7 @@ bool Kernel_removeProcess(Kernel *self, Process *p) {
     for (uint32_t i = 0; i < (*self).processCount; i++) {
         if ((*self).processes[i] == p) {
             (*self).processes[i] = (*self).processes[--(*self).processCount];
-            (*self).processes[(*self).processCount] = NULL;
+            (*self).processes[(*self).processCount] = nullptr;
             return true;
         }
     }
@@ -860,7 +860,7 @@ bool Kernel_removeConsole(Kernel *self, Console *c) {
     for (uint32_t i = 0; i < (*self).consoleCount; i++) {
         if ((*self).consoles[i] == c) {
             (*self).consoles[i] = (*self).consoles[--(*self).consoleCount];
-            (*self).consoles[(*self).consoleCount] = NULL;
+            (*self).consoles[(*self).consoleCount] = nullptr;
             return true;
         }
     }
@@ -930,9 +930,9 @@ uint32_t Kernel_getEndFunctionCount(const Kernel *self) {
 ;;GETTER
 Application *Kernel_getApplication(const Kernel *self, uint32_t index) {
     if (!self)
-        return NULL;
+        return nullptr;
     if (index >= (*self).applicationCount)
-        return NULL;
+        return nullptr;
     return (*self).applications[index];
 }
 
@@ -971,9 +971,9 @@ int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continue
 ;;GETTER
 Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
     if (!self)
-        return NULL;
+        return nullptr;
     if (index >= (*self).processCount)
-        return NULL;
+        return nullptr;
     return (*self).processes[index];
 }
 
@@ -998,9 +998,9 @@ uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
 ;;GETTER
 Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
     if (!self)
-        return NULL;
+        return nullptr;
     if (index >= (*self).consoleCount)
-        return NULL;
+        return nullptr;
     return (*self).consoles[index];
 }
 
@@ -1025,23 +1025,23 @@ uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
 ;;GETTER
 void *Kernel_getArena(const Kernel *self) {
     if (!self)
-        return NULL;
+        return nullptr;
     return (*self).arena;
 }
 
 ;;GETTER
 void *Kernel_getTransientArena(const Kernel *self) {
     if (!self)
-        return NULL;
+        return nullptr;
     return (*self).transientArena;
 }
 
 ;;GETTER
 Lifetime *Kernel_getLifetime(Kernel *self) {
-    return self ? &(*self).lifetime : NULL;
+    return self ? &(*self).lifetime : nullptr;
 }
 
 ;;GETTER
 const Lifetime *Kernel_lifetime(const Kernel *self) {
-    return self ? &(*self).lifetime : NULL;
+    return self ? &(*self).lifetime : nullptr;
 }

@@ -21,7 +21,7 @@
  * exit status) while delegating process execution across the ConsoleIo function-table
  * seam to avoid direct thread or socket ownership in hotcwap.
  *
- * Memory consists of fixed-capacity string buffers for command and directory, an
+ * memory consists of fixed-capacity string buffers for command and directory, an
  * injectable ConsoleIo function table, and an atomic cancel flag. Allocation is
  * cold heap via calloc; child process operations run non-blocking in slices bounded
  * to at most 100 milliseconds per the Bounded Wait Law.
@@ -119,7 +119,7 @@ Console *Console_0(void) {
 Console *Console_1(const char *shell) {
     Console *self = (Console*) calloc(1, sizeof(Console));
     if (!self)
-        return NULL;
+        return nullptr;
     console_clamp_copy((*self).shell, CONSOLE_MAX_SHELL, shell);
     (*self).workDir[0] = '\0';
     memset(&(*self).io, 0, sizeof(ConsoleIo));
@@ -261,4 +261,3 @@ const ConsoleIo *Console_getIo(const Console *self) {
         return nullptr;
     return (*self).io.ctx ? &(*self).io : nullptr;
 }
-

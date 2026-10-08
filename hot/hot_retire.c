@@ -17,7 +17,7 @@
  * Prevents segmentation faults from in-flight function execution by parking old
  * module handles across a multi-generation grace period before invoking dlclose.
  *
- * Memory consists of a fixed-capacity ring of 16 retired handle slots paired with
+ * memory consists of a fixed-capacity ring of 16 retired handle slots paired with
  * generation stamps. Handles are automatically evicted and closed once their age
  * exceeds HOT_RETIRED_GENERATIONS or when the ring is explicitly drained at teardown.
  * ============================================================================
@@ -86,7 +86,7 @@ void HotRetireRing_retire(HotRetireRing *self, void *handle) {
         HotRetiredHandle *slot = &(*self).slots[i];
         if ((*slot).handle && ((*self).generation - (*slot).generation >= HOT_RETIRED_GENERATIONS)) {
             dlclose((*slot).handle);
-            (*slot).handle = NULL;
+            (*slot).handle = nullptr;
         }
     }
 
@@ -126,7 +126,7 @@ void HotRetireRing_advance(HotRetireRing *self) {
         HotRetiredHandle *slot = &(*self).slots[i];
         if ((*slot).handle && ((*self).generation - (*slot).generation >= HOT_RETIRED_GENERATIONS)) {
             dlclose((*slot).handle);
-            (*slot).handle = NULL;
+            (*slot).handle = nullptr;
         }
     }
 }
@@ -137,7 +137,7 @@ void HotRetireRing_drainAll(HotRetireRing *self) {
         HotRetiredHandle *slot = &(*self).slots[i];
         if ((*slot).handle) {
             dlclose((*slot).handle);
-            (*slot).handle = NULL;
+            (*slot).handle = nullptr;
         }
     }
 }

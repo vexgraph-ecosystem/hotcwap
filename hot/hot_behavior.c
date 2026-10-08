@@ -40,9 +40,9 @@
  *   renderHandler after dlclose.
  *
  *   State schema (versioned for L3 migration + rollback validation):
- *     v1 (1.0.0): [phaseBias f32][modeShadow i32] = 8 bytes
- *     v2 (1.1.0): [phaseBias f32][modeShadow i32][glowStrength f32] = 12 bytes
- *     v3 (1.2.0): [schemaMagic u32][phaseBias f32][modeShadow i32][glowStrength f32] = 16 bytes
+ *     v1 (1.0.0): [phaseBias f32][modeShadow i32] = 8 Bytes
+ *     v2 (1.1.0): [phaseBias f32][modeShadow i32][glowStrength f32] = 12 Bytes
+ *     v3 (1.2.0): [schemaMagic u32][phaseBias f32][modeShadow i32][glowStrength f32] = 16 Bytes
  *   Hot_save emits v3 blobs carrying HOT_BEHAVIOR_SCHEMA_MAGIC as an ownership
  *   tag. Hot_restore adopts a v3 blob only when its magic matches the current
  *   build (a foreign magic returns false), wraps legacy v1/v2 sizes into the

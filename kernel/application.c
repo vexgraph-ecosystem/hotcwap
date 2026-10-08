@@ -199,9 +199,9 @@ Application *Application_0(void) {
     Application_init();
     Application *self = (Application*) calloc(1, sizeof(Application));
     if (!self) return nullptr;
-    if (pthread_mutex_init(&(*self).invokeMutex, NULL) != 0) { free(self); return NULL; }
-    if (pthread_cond_init(&(*self).invokeCondition, NULL) != 0) {
-        pthread_mutex_destroy(&(*self).invokeMutex); free(self); return NULL;
+    if (pthread_mutex_init(&(*self).invokeMutex, nullptr) != 0) { free(self); return nullptr; }
+    if (pthread_cond_init(&(*self).invokeCondition, nullptr) != 0) {
+        pthread_mutex_destroy(&(*self).invokeMutex); free(self); return nullptr;
     }
     strncpy((*self).name, "vex", APP_MAX_NAME - 1);
     return self;
@@ -239,7 +239,7 @@ static void *appStartWorker(void *userdata) {
     for (uint32_t i = 0; i < (*self).startCount && Application_isRunning(self); i++)
         (*self).startFns[i](self, (*self).startUsers[i]);
     atomic_store_explicit(&(*self).workerDone, true, memory_order_release);
-    return NULL;
+    return nullptr;
 }
 
 Application *Application_current(void) { return s_current; }
@@ -255,7 +255,7 @@ bool Application_begin(Application *self) {
     for (uint32_t i = 0; i < (*self).window_count; i++)
         if (!Window_shouldClose((*self).windows[i])) Window_show((*self).windows[i]);
     if ((*self).startCount) {
-        if (pthread_create(&(*self).startThread, NULL, appStartWorker, self) != 0) {
+        if (pthread_create(&(*self).startThread, nullptr, appStartWorker, self) != 0) {
             atomic_store(&(*self).workerDone, true);
             Application_close(self);
             Application_finish(self);
@@ -303,7 +303,7 @@ bool Application_removePollEvent(Application *self, ApplicationEventFn fn, void 
     if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
     for (uint32_t i = 0; i < APP_MAX_EVENTS; i++)
         if ((*self).pollFns[i] == fn && (*self).pollUsers[i] == userdata) {
-            (*self).pollFns[i] = NULL; (*self).pollUsers[i] = NULL; return true;
+            (*self).pollFns[i] = nullptr; (*self).pollUsers[i] = nullptr; return true;
         }
     return false;
 }
@@ -330,14 +330,14 @@ void Application_poll(Application *self) {
     if (!self || !atomic_load(&(*self).active) || !pthread_equal(pthread_self(), (*self).ownerThread)) return;
     Application *previous = s_current; s_current = self;
     pthread_mutex_lock(&(*self).invokeMutex);
-    ApplicationEventFn fn = (*self).invokeExecuting ? NULL : (*self).invokeFn;
+    ApplicationEventFn fn = (*self).invokeExecuting ? nullptr : (*self).invokeFn;
     void *userdata = (*self).invokeUser;
     if (fn) (*self).invokeExecuting = true;
     pthread_mutex_unlock(&(*self).invokeMutex);
     if (fn) {
         fn(self, userdata);
         pthread_mutex_lock(&(*self).invokeMutex);
-        (*self).invokeFn = NULL;
+        (*self).invokeFn = nullptr;
         (*self).invokeExecuting = false;
         pthread_cond_broadcast(&(*self).invokeCondition);
         pthread_mutex_unlock(&(*self).invokeMutex);
@@ -357,9 +357,9 @@ void Application_finish(Application *self) {
     while (!atomic_load_explicit(&(*self).workerDone, memory_order_acquire)) {
         Application_poll(self);
         Window_pollEvents();
-        struct timespec slice = {0, 1000000}; nanosleep(&slice, NULL);
+        struct timespec slice = {0, 1000000}; nanosleep(&slice, nullptr);
     }
-    if ((*self).workerLaunched) { pthread_join((*self).startThread, NULL); (*self).workerLaunched = false; }
+    if ((*self).workerLaunched) { pthread_join((*self).startThread, nullptr); (*self).workerLaunched = false; }
     atomic_store(&(*self).active, false);
 }
 

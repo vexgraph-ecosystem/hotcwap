@@ -12,7 +12,7 @@
 // lifecycle (quit veto, resized, fullscreen, minimized, restored, pressed,
 // focus, zoom), and routes OS input into the vexspoke Key/Mouse/Touch rings.
 // There is NO Vulkan, NO Metal, NO CAMetalLayer, NO board/pane compositing,
-// and NO present worker in this file — rendering is the render repos' job
+// and NO present worker in this file — rendering is the render personal' job
 // (graphvex/darling) and reaches the screen through the content view and the
 // event bridges, exactly per the Window Decoupling Law (a Window is a dumb
 // surface + callback bridge, never a renderer).
@@ -1145,7 +1145,7 @@ void Window_waitEvents(Window *window, int timeoutMs) {
 @implementation VexWindow
 - (BOOL)canBecomeKeyWindow {
     Window *h = self.vexHandle;
-    if (h != NULL && !atomic_load_explicit(&(*h).keyEnabled, memory_order_relaxed))
+    if (h != nullptr && !atomic_load_explicit(&(*h).keyEnabled, memory_order_relaxed))
         return NO;
     return [super canBecomeKeyWindow];
 }
@@ -1484,7 +1484,7 @@ void *Window_getTopLayer(const Window *window) {
     return nullptr;
 }
 
-// ;;INTENTION("Pane/board compositing was the GPU-era shim's job; on this window it is inert (still-unmigrated darling compositor retains the call). Pane work migrates to the render repos' own pass; retires together with the composite seam.")
+// ;;INTENTION("Pane/board compositing was the GPU-era shim's job; on this window it is inert (still-unmigrated darling compositor retains the call). Pane work migrates to the render personal' own pass; retires together with the composite seam.")
 bool Window_attachPanes(Window *window, Panel *panel, int width, int height) {
     (void) window;
     (void) panel;
@@ -2172,16 +2172,16 @@ void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int w
         // until the layer is done; live resize flushes the committed CA updates
         // but that submission is not a buffer-lifetime completion fence.
         CGDataProviderRef provider =
-            CGDataProviderCreateWithData(NULL, pixels, stride * (size_t) height, NULL);
-        if (provider == NULL)
+            CGDataProviderCreateWithData(nullptr, pixels, stride * (size_t) height, nullptr);
+        if (provider == nullptr)
             return;
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGImageRef img = CGImageCreate((size_t) width, (size_t) height, 8, 32, stride, cs,
                                        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
-                                       provider, NULL, false, kCGRenderingIntentDefault);
+                                       provider, nullptr, false, kCGRenderingIntentDefault);
         CGColorSpaceRelease(cs);
         CGDataProviderRelease(provider);
-        if (img == NULL)
+        if (img == nullptr)
             return;
         view.wantsLayer = YES;
         [CATransaction begin];
@@ -2205,7 +2205,7 @@ void *Window_createPresentSurface(Window *window, int widthPx, int heightPx) {
     if (window == nullptr || widthPx <= 0 || heightPx <= 0)
         return nullptr;
     @autoreleasepool {
-        // Row bytes must be aligned for Metal to build a texture from the
+        // Row Bytes must be aligned for Metal to build a texture from the
         // IOSurface (an unaligned width*4 aborts in _mtlValidateStrideTextureParameters).
         int rowBytes = ((widthPx * 4) + 63) & ~63;
         NSDictionary *props = @{
@@ -2267,7 +2267,7 @@ bool Window_readPresentSurface(Window *window, void *surface, void *destRGBA, si
     if (surface == nullptr || destRGBA == nullptr || destStride == 0)
         return false;
     IOSurfaceRef s = (IOSurfaceRef) surface;
-    if (IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess)
+    if (IOSurfaceLock(s, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess)
         return false;
     const uint8_t *base = (const uint8_t *) IOSurfaceGetBaseAddress(s);
     size_t srcStride = IOSurfaceGetBytesPerRow(s);
@@ -2276,7 +2276,7 @@ bool Window_readPresentSurface(Window *window, void *surface, void *destRGBA, si
     for (uint32_t y = 0; y < h; y++)
         memcpy((uint8_t *) destRGBA + (size_t) y * destStride,
                base + (size_t) y * srcStride, (size_t) w * 4u);
-    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, nullptr);
     return true;
 }
 
@@ -2288,24 +2288,24 @@ bool Window_writePNG(const void *pixels, size_t stride, int width, int height, c
     bool ok = false;
     @autoreleasepool {
         CGDataProviderRef provider =
-            CGDataProviderCreateWithData(NULL, pixels, stride * (size_t) height, NULL);
-        if (provider == NULL)
+            CGDataProviderCreateWithData(nullptr, pixels, stride * (size_t) height, nullptr);
+        if (provider == nullptr)
             return false;
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGImageRef img = CGImageCreate((size_t) width, (size_t) height, 8, 32, stride, cs,
                                        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
-                                       provider, NULL, false, kCGRenderingIntentDefault);
+                                       provider, nullptr, false, kCGRenderingIntentDefault);
         CGColorSpaceRelease(cs);
         CGDataProviderRelease(provider);
-        if (img == NULL)
+        if (img == nullptr)
             return false;
         CFURLRef url = CFURLCreateFromFileSystemRepresentation(
-            NULL, (const UInt8 *) path, (CFIndex) strlen(path), false);
-        if (url != NULL) {
+            nullptr, (const UInt8*) path, (CFIndex) strlen(path), false);
+        if (url != nullptr) {
             CGImageDestinationRef dest =
-                CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
-            if (dest != NULL) {
-                CGImageDestinationAddImage(dest, img, NULL);
+                CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr);
+            if (dest != nullptr) {
+                CGImageDestinationAddImage(dest, img, nullptr);
                 ok = CGImageDestinationFinalize(dest);
                 CFRelease(dest);
             }
@@ -2517,7 +2517,7 @@ WindowCursorType Window_getCursorType(const Window *window) {
 
 // --- Software frame presentation (inert without a render target) ------------
 
-// ;;INTENTION("Window_present on the fresh window is inert (`return false`): a pure AppKit window has no raster target of its own. Software present was GPU-era shim logic; the render repos own pixel paths. Retires with the composite seam.")
+// ;;INTENTION("Window_present on the fresh window is inert (`return false`): a pure AppKit window has no raster target of its own. Software present was GPU-era shim logic; the render personal own pixel paths. Retires with the composite seam.")
 bool Window_present(Window *window, const Buffer *frame) {
     (void) window;
     (void) frame;
@@ -2538,7 +2538,7 @@ void *Window_nativeHandle(const Window *window) {
     return (__bridge void*) (*window).nsWindow;
 }
 
-// ;;INTENTION("Window_metalLayer is gone from this file by design (no Metal here). Returns nullptr so the VK_EXT_metal_surface path degrades cleanly until the render repos create their own CAMetalLayer on the content view. Retires with the composite seam.")
+// ;;INTENTION("Window_metalLayer is gone from this file by design (no Metal here). Returns nullptr so the VK_EXT_metal_surface path degrades cleanly until the render personal create their own CAMetalLayer on the content view. Retires with the composite seam.")
 void *Window_metalLayer(Window *window) {
     (void) window;
     return nullptr;

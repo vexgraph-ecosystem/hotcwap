@@ -70,7 +70,7 @@ static int s_osMajor = -1;       // running macOS major (0 = unknown)
 static bool sysctlFlag(const char *name) {
     uint64_t value = 0;
     size_t size = sizeof value;
-    if (sysctlbyname(name, &value, &size, NULL, 0) != 0)
+    if (sysctlbyname(name, &value, &size, nullptr, 0) != 0)
         return false;
     return value != 0;
 }
@@ -81,7 +81,7 @@ static int probeOsMajor(void) {
 #if defined(__APPLE__)
     char buf[32];
     size_t size = sizeof buf;
-    if (sysctlbyname("kern.osproductversion", buf, &size, NULL, 0) != 0)
+    if (sysctlbyname("kern.osproductversion", buf, &size, nullptr, 0) != 0)
         return 0;
     buf[sizeof buf - 1] = '\0';
     int major = 0;

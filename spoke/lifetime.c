@@ -14,7 +14,7 @@
  * ============================================================================
  * DEFINITION: Lifetime
  * ============================================================================
- * Memory substrate abstraction bridging R1 host execution with R2 persistent
+ * memory substrate abstraction bridging R1 host execution with R2 persistent
  * and transient memory arenas. hotcwap operates purely on opaque void* pointers
  * without including vexspoke headers, preserving decoupling while strictly
  * validating pointer legitimacy (16-byte alignment, non-null, user address range >= 64KB).
@@ -71,8 +71,8 @@
  *   - Lifetime_isValid(lifetime)                       : Validate arena handles and types
  *   - Lifetime_destroy(lifetime)                       : Release arena resources
  *   - Lifetime_resetTransient(lifetime)                : Free all scratch allocations
- *   - Lifetime_allocPersistent(lifetime, type, bytes)  : Allocate from master arena
- *   - Lifetime_allocTransient(lifetime, type, bytes)   : Allocate from scratch arena
+ *   - Lifetime_allocPersistent(lifetime, type, Bytes)  : Allocate from master arena
+ *   - Lifetime_allocTransient(lifetime, type, Bytes)   : Allocate from scratch arena
  *   - Lifetime_freePersistent(lifetime, ptr)           : Free master arena allocation
  *
  * Private Core Functions: (.c static)
@@ -212,20 +212,20 @@ void Lifetime_resetTransient(Lifetime *lifetime) {
     MemoryArena_freeAll((*lifetime).transientArena);
 }
 
-void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t bytes) {
+void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t Bytes) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).persistentArena))
         return nullptr;
-    void *ptr = MemoryArena_alloc((*lifetime).persistentArena, typeId, bytes);
+    void *ptr = MemoryArena_alloc((*lifetime).persistentArena, typeId, Bytes);
     if (!Lifetime_isLegit(ptr)) {
         return nullptr;
     }
     return ptr;
 }
 
-void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t bytes) {
+void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t Bytes) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).transientArena))
         return nullptr;
-    void *ptr = MemoryArena_alloc((*lifetime).transientArena, typeId, bytes);
+    void *ptr = MemoryArena_alloc((*lifetime).transientArena, typeId, Bytes);
     if (!Lifetime_isLegit(ptr)) {
         return nullptr;
     }

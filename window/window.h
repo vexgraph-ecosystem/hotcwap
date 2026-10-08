@@ -209,7 +209,7 @@ bool Window_isTransparent(const Window *window);
 
 // Raster presentation: copy a tightly packed opaque RGBA8 buffer (byte order
 // R,G,B,A; native px; top-left origin, Y-down) into the window's content view.
-// `stride` is the row pitch in bytes (>= width*4). Thread 0 only. The buffer is
+// `stride` is the row pitch in Bytes (>= width*4). Thread 0 only. The buffer is
 // referenced, not copied, so it must stay valid until the next present.
 void Window_presentRGBA(Window *window, const void *pixels, size_t stride, int width, int height);
 
@@ -230,7 +230,7 @@ void  Window_presentSurface(Window *window, void *surface);
 void *Window_presentSurfaceContents(const Window *window);   // what the layer shows
 
 // Read a present surface's pixels into a tightly packed RGBA8 buffer (the
-// screenshot/CAPTURE path on the GPU seam). `destStride` is bytes/row. Thread 0.
+// screenshot/CAPTURE path on the GPU seam). `destStride` is Bytes/row. Thread 0.
 bool Window_readPresentSurface(Window *window, void *surface, void *destRGBA, size_t destStride);
 
 // Screenshot: write a tightly packed RGBA8 buffer (same layout as

@@ -41,8 +41,8 @@ void Lifetime_destroy(Lifetime *lifetime);
 void Lifetime_resetTransient(Lifetime *lifetime);
 
 // Aligned arena allocators (returns verified, 16-byte aligned void* payloads)
-void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t bytes);
-void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t bytes);
+void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t Bytes);
+void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t Bytes);
 void Lifetime_freePersistent(Lifetime *lifetime, void *ptr);
 
 // Bind external opaque arenas (e.g. passed from vexspoke or host launcher)
