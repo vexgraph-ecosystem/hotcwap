@@ -44,10 +44,10 @@ algorithms, synchronization and behavior; Relational Engine owns memory/storage,
 stable row chunks, variable bindings and native C search over Rust-owned spans.
 **R1 owns their lifetimes/residency:** stop admission and active users before
 storage destruction, and keep code/storage resident across consumer reloads.
-Migration is staged. Existing Vexspoke memory/container ABI, default allocator
-and `spoke/lifetime` wiring remain unchanged; this documentation adds no direct
-engine-header dependency, automatic schema migration or live Hot loader
-integration. Never assume C/Rust atomic-layout compatibility. GPU shaders and
+Native IO/NIO and the default allocator implementation now come from Relational
+Engine with compatible C semantics. Broader collection migration remains staged;
+`spoke/lifetime` wiring is preserved, not automatic schema migration or live Hot
+loader integration. Never assume C/Rust atomic-layout compatibility. GPU shaders and
 dispatch remain Graphvex R3.
 
 ### Kernel lifecycle example
@@ -81,7 +81,7 @@ configure is not a standalone runtime build.
 
 * **`kernel/kernel.h/.c`** — R1 Host Supervisor (thin nano-VM): `Kernel {arena, transientArena, applications[KERNEL_MAX_APPS]}`. Boots first, tears down last. Holds opaque Application handles + callbacks, never engine headers.
 * **`process/`** — Process taxonomy: `process` (one-shot invocable), `application` (executable identity + window registry + hot-module slot), `console` (tty/session pump).
-* **`spoke/lifetime.h/.c`** — R1→R2 memory substrate contract for vexspoke (and vexspoke only): the `Lifetime` struct (master + transient arenas, opaque handles, type-attested). The single seam including vexspoke memory headers — `kernel/` names no vexspoke internal type.
+* **`spoke/lifetime.h/.c`** — R1→R2 memory substrate contract for vexspoke (and vexspoke only): the `Lifetime` struct (master + transient arenas, opaque handles, type-attested). The single seam including vexspoke memory headers — `kernel` names no vexspoke internal type.
 * **`window/window.h`** — Platform-agnostic window abstraction: creation, sizing, fullscreen toggles, input event dispatch, and title management.
 * **`window/window_cocoa.m`** — Native macOS AppKit backend (pure AppKit, zero Vulkan/Metal): window lifecycle, event pump, chrome, traffic-light API, per-window `WindowEvent` registry.
 * **`window/window_linux.c`** — Linux X11 fallback backend (kept for hosts without Wayland dev libraries).
