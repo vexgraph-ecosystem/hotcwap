@@ -131,4 +131,5 @@ Live reloading without ABI validation causes memory misalignment and crashes whe
 
 ## 4. Readiness Cross-Reference (Living Documentation Law)
 
-- Feature readiness matrix: [hotcwap](../../ecosystem/hotcwap.md), rendered as `[[hotcwap]]`.
+- Feature readiness matrix: [hotcwap](https://gist.github.com/vex-graph/6943f92acb931b25dad1073c46da6ce7#file-hotcwap-md).
+- Open blockers and deferred decisions: [ecosystem blockers Gist](https://gist.github.com/vex-graph/e921fa188eebbd0c68c4e59646109887).
