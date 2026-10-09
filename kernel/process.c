@@ -85,14 +85,17 @@
  */
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Creates a process using the supplied entry and no context or name. */
 Process *Process_1(ProcessEntry entry) {
     return Process_3(nullptr, entry, nullptr);
 }
 
+/** Creates a process with a borrowed context and no name. */
 Process *Process_2(ProcessEntry entry, void *context) {
     return Process_3(nullptr, entry, context);
 }
 
+/** Allocates a process whose callback, name, and context are borrowed. */
 Process *Process_3(const char *name, ProcessEntry entry, void *context) {
     if (!entry)
         return nullptr;
@@ -110,6 +113,7 @@ Process *Process_3(const char *name, ProcessEntry entry, void *context) {
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Invokes the entry once if the process is idle and reports its exit status. */
 ProcessResult Process_run(Process *self, int *exitStatus) {
     if (!self || !exitStatus)
         return PROCESS_INVALID;
@@ -127,6 +131,7 @@ ProcessResult Process_run(Process *self, int *exitStatus) {
     return PROCESS_OK;
 }
 
+/** Frees an idle process; returns false for null or while its entry is active. */
 bool Process_free(Process *self) {
     if (!self)
         return false;
@@ -140,6 +145,7 @@ bool Process_free(Process *self) {
 
 // SETTERS (PUBLIC & PRIVATE)
 ;;SETTER
+/** Replaces the entry, context, and borrowed hot association as one admission. */
 ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, void *hot) {
     if (!self || !entry)
         return PROCESS_INVALID;
@@ -155,6 +161,7 @@ ProcessResult Process_replace(Process *self, ProcessEntry entry, void *context, 
 }
 
 ;;SETTER
+/** Updates the borrowed name when no invocation or replacement holds the gate. */
 ProcessResult Process_setName(Process *self, const char *name) {
     if (!self)
         return PROCESS_INVALID;
@@ -169,32 +176,37 @@ ProcessResult Process_setName(Process *self, const char *name) {
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Reports whether the callback is currently executing. */
 bool Process_isRunning(const Process *self) {
     return self ? atomic_load_explicit(&(*self).inFlight, memory_order_acquire) : false;
 }
 
 ;;GETTER
+/** Returns the number of callbacks that completed. */
 uint32_t Process_getInvocationCount(const Process *self) {
     return self ? atomic_load_explicit(&(*self).invocationCount, memory_order_relaxed) : 0;
 }
 
 ;;GETTER
+/** Returns the currently installed entry, or nullptr for a null process. */
 ProcessEntry Process_getEntry(const Process *self) {
     return self ? atomic_load_explicit(&(*self).entry, memory_order_relaxed) : nullptr;
 }
 
 ;;GETTER
+/** Returns the borrowed callback context, or nullptr for a null process. */
 void *Process_getContext(const Process *self) {
     return self ? atomic_load_explicit(&(*self).context, memory_order_relaxed) : nullptr;
 }
 
 ;;GETTER
+/** Returns the associated hot handle; this association does not pin its module. */
 void *Process_getHot(const Process *self) {
     return self ? atomic_load_explicit(&(*self).hot, memory_order_relaxed) : nullptr;
 }
 
 ;;GETTER
+/** Returns the borrowed process name, or nullptr for a null process. */
 const char *Process_getName(const Process *self) {
     return self ? atomic_load_explicit(&(*self).name, memory_order_relaxed) : nullptr;
 }
-

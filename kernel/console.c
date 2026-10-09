@@ -101,6 +101,7 @@
 // SIGTERM and the supervising thread observing completion via io.joined.
 // All io.fn-pointers are nullable — NULL degrades gracefully per the Cold-Strict, Hot-Minimal Validation Law.")
 
+/** Copies a string into a bounded buffer and always terminates nonempty output. */
 static void console_clamp_copy(char *dst, size_t cap, const char *src) {
     if (!dst || cap == 0)
         return;
@@ -112,10 +113,12 @@ static void console_clamp_copy(char *dst, size_t cap, const char *src) {
 }
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Creates a console configured to use the default shell. */
 Console *Console_0(void) {
     return Console_1("/bin/sh");
 }
 
+/** Allocates a stopped console and copies the supplied shell name. */
 Console *Console_1(const char *shell) {
     Console *self = (Console*) calloc(1, sizeof(Console));
     if (!self)
@@ -130,6 +133,7 @@ Console *Console_1(const char *shell) {
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Starts a session through the configured spawn callback if one is available. */
 bool Console_run(Console *self) {
     if (!self)
         return false;
@@ -146,6 +150,7 @@ bool Console_run(Console *self) {
     return ok;
 }
 
+/** Sends a byte span to the active session through its feed callback. */
 bool Console_writeInput(Console *self, const char *line, size_t len) {
     if (!self)
         return false;
@@ -157,6 +162,7 @@ bool Console_writeInput(Console *self, const char *line, size_t len) {
     return (*io).feed((*io).ctx, line, len);
 }
 
+/** Drains one output slice and clears running state when the seam reports joined. */
 bool Console_poll(Console *self, char *out, size_t outCap, size_t *outLen) {
     if (!self)
         return false;
@@ -183,6 +189,7 @@ bool Console_poll(Console *self, char *out, size_t outCap, size_t *outLen) {
     return ok;
 }
 
+/** Sets the cancellation flag and invokes the optional seam cancellation callback. */
 void Console_cancel(Console *self) {
     if (!self)
         return;
@@ -192,6 +199,7 @@ void Console_cancel(Console *self) {
         (*io).cancel((*io).ctx);
 }
 
+/** Requests cancellation if active, clears the borrowed IO table, and frees self. */
 void Console_free(Console *self) {
     if (!self)
         return;
@@ -201,12 +209,14 @@ void Console_free(Console *self) {
     free(self);
 }
 
+/** Returns whether a session is currently active. */
 bool Console_isRunning(const Console *self) {
     if (!self)
         return false;
     return (*self).running;
 }
 
+/** Returns the last session exit status, or -1 for a null console. */
 int Console_getExitStatus(const Console *self) {
     if (!self)
         return -1;
@@ -215,6 +225,7 @@ int Console_getExitStatus(const Console *self) {
 
 // SETTERS (PUBLIC & PRIVATE)
 ;;SETTER
+/** Copies the shell string into the console's bounded shell buffer. */
 void Console_setShell(Console *self, const char *shell) {
     if (!self)
         return;
@@ -222,6 +233,7 @@ void Console_setShell(Console *self, const char *shell) {
 }
 
 ;;SETTER
+/** Copies the working directory into the console's bounded path buffer. */
 void Console_setWorkDir(Console *self, const char *workDir) {
     if (!self)
         return;
@@ -229,6 +241,7 @@ void Console_setWorkDir(Console *self, const char *workDir) {
 }
 
 ;;SETTER
+/** Copies the IO callbacks and replaces their context with ioCtx. */
 void Console_setIo(Console *self, const ConsoleIo *io, void *ioCtx) {
     if (!self)
         return;
@@ -242,6 +255,7 @@ void Console_setIo(Console *self, const ConsoleIo *io, void *ioCtx) {
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Returns the configured shell buffer, or nullptr for a null console. */
 const char *Console_getShell(const Console *self) {
     if (!self)
         return nullptr;
@@ -249,6 +263,7 @@ const char *Console_getShell(const Console *self) {
 }
 
 ;;GETTER
+/** Returns the configured working-directory buffer, or nullptr for null. */
 const char *Console_getWorkDir(const Console *self) {
     if (!self)
         return nullptr;
@@ -256,6 +271,7 @@ const char *Console_getWorkDir(const Console *self) {
 }
 
 ;;GETTER
+/** Returns the IO table only when its context is non-null. */
 const ConsoleIo *Console_getIo(const Console *self) {
     if (!self)
         return nullptr;

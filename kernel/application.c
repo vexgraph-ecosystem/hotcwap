@@ -144,6 +144,7 @@ static _Thread_local Application *s_current;
             "run on a supervised worker; native operations are serviced on the "
             "owner thread. Hiding never completes an app; all windows must close.")
 
+/** Bootstraps shared system services once; returns true after initialization. */
 bool Application_init() {
     if (s_bootstrapped)
         return true;
@@ -155,6 +156,7 @@ bool Application_init() {
     return true;
 }
 
+/** Shuts down the key-input subsystem used by applications. */
 void Application_shutdown() {
     Key_shutdown();
 }
@@ -170,6 +172,7 @@ void Application_shutdown() {
 #define APP_PARK_SLICE_NS   (5 * 1000 * 1000)
 #define APP_PARK_SLICES     1
 
+/** Returns true only when the application had windows and all are closing. */
 static bool appAllWindowsClosed(const Application *self) {
     if ((*self).window_count == 0)
         return (*self).hadWindows;
@@ -179,6 +182,7 @@ static bool appAllWindowsClosed(const Application *self) {
     return true;
 }
 
+/** Services window/input work on the owner thread, then parks for one short slice. */
 static void appParkSlice(Application *self) {
     for (uint32_t i = 0; i < APP_PARK_SLICES; i++) {
         if (!atomic_load_explicit(&(*self).running, memory_order_relaxed))
@@ -195,6 +199,7 @@ static void appParkSlice(Application *self) {
 }
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Allocates an application manifest with the default name. */
 Application *Application_0(void) {
     Application_init();
     Application *self = (Application*) calloc(1, sizeof(Application));
@@ -207,6 +212,7 @@ Application *Application_0(void) {
     return self;
 }
 
+/** Creates an application and copies its name into the bounded field. */
 Application *Application_1(const char *name) {
     Application *self = Application_0();
     if (!self) return nullptr;
@@ -214,6 +220,7 @@ Application *Application_1(const char *name) {
     return self;
 }
 
+/** Creates an application and copies its name, author, and version. */
 Application *Application_3(const char *name, const char *author, const char *version) {
     Application *self = Application_0();
     if (!self) return nullptr;
@@ -224,6 +231,7 @@ Application *Application_3(const char *name, const char *author, const char *ver
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Frees an inactive application; leaves active instances allocated. */
 void Application_free(Application *self) {
     if (!self) return;
     // Caller must return from start/run (worker quiescence) before freeing.
@@ -234,6 +242,7 @@ void Application_free(Application *self) {
     free(self);
 }
 
+/** Runs registered start callbacks on the worker until stopped, then marks it done. */
 static void *appStartWorker(void *userdata) {
     Application *self = userdata;
     for (uint32_t i = 0; i < (*self).startCount && Application_isRunning(self); i++)
@@ -242,8 +251,10 @@ static void *appStartWorker(void *userdata) {
     return nullptr;
 }
 
+/** Returns the application currently being serviced on this thread, if any. */
 Application *Application_current(void) { return s_current; }
 
+/** Marks the application active, shows its windows, and starts its worker callbacks. */
 bool Application_begin(Application *self) {
     if (!self) return false;
     bool expected = false;
@@ -266,10 +277,12 @@ bool Application_begin(Application *self) {
     return true;
 }
 
+/** Begins the application and runs its owner-thread keep-alive loop. */
 void Application_start(Application *self) {
     if (Application_begin(self)) Application_run(self);
 }
 
+/** Requests closure and wakes callers waiting for owner-thread invocation. */
 void Application_close(Application *self) {
     if (!self) return;
     atomic_store(&(*self).closeRequested, true);
@@ -279,6 +292,7 @@ void Application_close(Application *self) {
     pthread_mutex_unlock(&(*self).invokeMutex);
 }
 
+/** Registers a startup callback before the application becomes active. */
 bool Application_addStartEvent(Application *self, ApplicationEventFn fn, void *userdata) {
     if (!self || !fn || atomic_load(&(*self).active) || (*self).startCount == APP_MAX_EVENTS) return false;
     uint32_t i = (*self).startCount++;
@@ -286,6 +300,7 @@ bool Application_addStartEvent(Application *self, ApplicationEventFn fn, void *u
     return true;
 }
 
+/** Registers an owner-thread poll callback, accepting an identical registration once. */
 bool Application_addPollEvent(Application *self, ApplicationEventFn fn, void *userdata) {
     if (!self || !fn) return false;
     if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
@@ -298,6 +313,7 @@ bool Application_addPollEvent(Application *self, ApplicationEventFn fn, void *us
     (*self).pollFns[empty] = fn; (*self).pollUsers[empty] = userdata; return true;
 }
 
+/** Removes the matching poll callback and userdata pair. */
 bool Application_removePollEvent(Application *self, ApplicationEventFn fn, void *userdata) {
     if (!self) return false;
     if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
@@ -308,6 +324,7 @@ bool Application_removePollEvent(Application *self, ApplicationEventFn fn, void 
     return false;
 }
 
+/** Runs immediately on the owner thread or queues work and waits for its completion. */
 bool Application_invoke(Application *self, ApplicationEventFn fn, void *userdata) {
     if (!self || !fn || !Application_isRunning(self)) return false;
     if (pthread_equal(pthread_self(), (*self).ownerThread)) {
@@ -326,6 +343,7 @@ bool Application_invoke(Application *self, ApplicationEventFn fn, void *userdata
     return true;
 }
 
+/** Executes queued owner work and registered poll callbacks on the owner thread. */
 void Application_poll(Application *self) {
     if (!self || !atomic_load(&(*self).active) || !pthread_equal(pthread_self(), (*self).ownerThread)) return;
     Application *previous = s_current; s_current = self;
@@ -348,6 +366,7 @@ void Application_poll(Application *self) {
     s_current = previous;
 }
 
+/** Closes registered windows, drains admitted owner work, joins startup work, and deactivates. */
 void Application_finish(Application *self) {
     if (!self || !atomic_load(&(*self).active) || !pthread_equal(pthread_self(), (*self).ownerThread)) return;
     Application_close(self);
@@ -363,15 +382,18 @@ void Application_finish(Application *self) {
     atomic_store(&(*self).active, false);
 }
 
+/** Requests application closure through Application_close. */
 void Application_stop(Application *self) {
     if (!self) return;
     Application_close(self);
 }
 
+/** Reads the atomic running flag; null applications are not running. */
 bool Application_isRunning(const Application *self) {
     return self ? atomic_load_explicit(&(*self).running, memory_order_relaxed) : false;
 }
 
+/** Reports completion when stopped or when all applicable registered windows close. */
 bool Application_isFinished(const Application *self) {
     if(self == nullptr)
         return true;
@@ -389,6 +411,7 @@ bool Application_isFinished(const Application *self) {
 // app only ASKS "any window still open?" at the 250ms cadence. So
 // Kernel_run(kernel, app) blocks: the app stays alive exactly as long as a
 // window is open.
+/** Parks and services the application until stopped or all registered windows close. */
 void Application_run(Application *self) {
     if (!self) return;
     if (!atomic_load(&(*self).active) && !Application_begin(self)) return;
@@ -404,6 +427,7 @@ void Application_run(Application *self) {
     Application_finish(self);
 }
 
+/** Adds a borrowed window unless duplicated, full, or disallowed by active ownership. */
 bool Application_addWindow(Application *self, Window *win) {
     if (!self || !win) return false;
     if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
@@ -416,6 +440,7 @@ bool Application_addWindow(Application *self, Window *win) {
     return true;
 }
 
+/** Removes a registered borrowed window without destroying it. */
 bool Application_removeWindow(Application *self, Window *win) {
     if (!self || !win) return false;
     if (atomic_load(&(*self).active) && !pthread_equal(pthread_self(), (*self).ownerThread)) return false;
@@ -429,12 +454,14 @@ bool Application_removeWindow(Application *self, Window *win) {
     return false;
 }
 
+/** Installs the callback notified after a successful generation reload. */
 void Application_onHotReload(Application *self, AppHotReloadFn fn, void *userdata) {
     if (!self) return;
     (*self).hotReloadFn = fn;
     (*self).hotReloadUserdata = userdata;
 }
 
+/** Polls the associated HotModule and reports successful loaded sections. */
 void Application_pollHot(Application *self) {
     if (!self || !(*self).hot)
         return;
@@ -446,12 +473,14 @@ void Application_pollHot(Application *self) {
 
 // SETTERS (PUBLIC & PRIVATE)
 ;;SETTER
+/** Associates a borrowed HotModule used by Application_pollHot. */
 void Application_setHot(Application *self, HotModule *hot) {
     if (!self) return;
     (*self).hot = hot;
 }
 
 ;;SETTER
+/** Copies a name into the application's fixed-capacity name field. */
 void Application_setName(Application *self, const char *name) {
     if (!self || !name) return;
     strncpy((*self).name, name, APP_MAX_NAME - 1);
@@ -459,6 +488,7 @@ void Application_setName(Application *self, const char *name) {
 }
 
 ;;SETTER
+/** Copies an author label into the application's fixed-capacity field. */
 void Application_setAuthor(Application *self, const char *author) {
     if (!self || !author) return;
     strncpy((*self).author, author, APP_MAX_NAME - 1);
@@ -466,6 +496,7 @@ void Application_setAuthor(Application *self, const char *author) {
 }
 
 ;;SETTER
+/** Copies a version string into the application's fixed-capacity field. */
 void Application_setVersion(Application *self, const char *version) {
     if (!self || !version) return;
     strncpy((*self).version, version, APP_MAX_VERSION - 1);
@@ -473,6 +504,7 @@ void Application_setVersion(Application *self, const char *version) {
 }
 
 ;;SETTER
+/** Copies an icon path into the application's fixed-capacity field. */
 void Application_setIconPath(Application *self, const char *iconPath) {
     if (!self || !iconPath) return;
     strncpy((*self).iconPath, iconPath, APP_MAX_ICON_PATH - 1);
@@ -481,45 +513,53 @@ void Application_setIconPath(Application *self, const char *iconPath) {
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Returns the latest atomically published frames-per-second value. */
 uint32_t Application_getFps(const Application *self) {
     return self ? atomic_load_explicit(&(*self).fps, memory_order_relaxed) : 0;
 }
 
 ;;GETTER
+/** Returns the latest atomically published frame duration in microseconds. */
 uint32_t Application_getFrametimeUs(const Application *self) {
     return self ? atomic_load_explicit(&(*self).frametimeUs, memory_order_relaxed) : 0;
 }
 
 ;;GETTER
+/** Returns the associated borrowed hot module, or nullptr for null self. */
 HotModule *Application_getHot(const Application *self) {
     return self ? (*self).hot : nullptr;
 }
 
 ;;GETTER
+/** Returns the internal name buffer, or nullptr for null self. */
 const char *Application_getName(const Application *self) {
     if (!self) return nullptr;
     return (*self).name;
 }
 
 ;;GETTER
+/** Returns the internal author buffer, or nullptr for null self. */
 const char *Application_getAuthor(const Application *self) {
     if (!self) return nullptr;
     return (*self).author;
 }
 
 ;;GETTER
+/** Returns the internal version buffer, or nullptr for null self. */
 const char *Application_getVersion(const Application *self) {
     if (!self) return nullptr;
     return (*self).version;
 }
 
 ;;GETTER
+/** Returns the internal icon-path buffer, or nullptr for null self. */
 const char *Application_getIconPath(const Application *self) {
     if (!self) return nullptr;
     return (*self).iconPath;
 }
 
 ;;GETTER
+/** Returns the registered window at index, or nullptr when out of range. */
 Window *Application_getWindow(const Application *self, uint32_t index) {
     if (!self) return nullptr;
     if (index >= (*self).window_count) return nullptr;
@@ -527,12 +567,14 @@ Window *Application_getWindow(const Application *self, uint32_t index) {
 }
 
 ;;GETTER
+/** Returns the number of registered windows. */
 uint32_t Application_getWindowCount(const Application *self) {
     if (!self) return 0;
     return (*self).window_count;
 }
 
 ;;GETTER
+/** Copies up to cap borrowed window pointers into out and returns the copied count. */
 uint32_t Application_getWindows(const Application *self, Window **out, uint32_t cap) {
     if (!self || !out) return 0;
     uint32_t n = (*self).window_count;
