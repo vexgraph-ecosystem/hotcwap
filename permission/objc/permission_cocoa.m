@@ -84,6 +84,7 @@ static bool hostHasBundle(void) {
 }
 
 // --- Framework status -> PermissionStatus -----------------------------------
+/** Maps an AVFoundation authorization value to the portable permission status. */
 static PermissionStatus mapAV(AVAuthorizationStatus status) {
     switch (status) {
         case AVAuthorizationStatusAuthorized:    return PERMISSION_GRANTED;
@@ -94,6 +95,7 @@ static PermissionStatus mapAV(AVAuthorizationStatus status) {
     }
 }
 
+/** Maps a Contacts authorization value to the portable permission status. */
 static PermissionStatus mapCN(CNAuthorizationStatus status) {
     switch (status) {
         case CNAuthorizationStatusAuthorized:    return PERMISSION_GRANTED;
@@ -104,6 +106,7 @@ static PermissionStatus mapCN(CNAuthorizationStatus status) {
     }
 }
 
+/** Maps an EventKit authorization value to the portable permission status. */
 static PermissionStatus mapEK(EKAuthorizationStatus status) {
     // Named via if-chain: EKAuthorizationStatusAuthorized is deprecated (mac 14)
     // in favor of FullAccess/WriteOnly, so we never name it — anything short of
@@ -117,6 +120,7 @@ static PermissionStatus mapEK(EKAuthorizationStatus status) {
     return PERMISSION_GRANTED;
 }
 
+/** Maps a Photos authorization value to the portable permission status. */
 static PermissionStatus mapPH(PHAuthorizationStatus status) {
     switch (status) {
         case PHAuthorizationStatusAuthorized:    return PERMISSION_GRANTED;
@@ -128,6 +132,7 @@ static PermissionStatus mapPH(PHAuthorizationStatus status) {
     }
 }
 
+/** Maps a Core Location authorization value to the portable permission status. */
 static PermissionStatus mapCL(CLAuthorizationStatus status) {
     // kCLAuthorizationStatusAuthorizedWhenInUse is iOS-only; on macOS the grant
     // is AuthorizedAlways. kCLAuthorizationStatusAuthorized is deprecated, so it
@@ -154,24 +159,28 @@ static PermissionStatus statusCamera(void) {
     return mapAV([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]);
 }
 
+/** Reads the current microphone authorization status. */
 static PermissionStatus statusMicrophone(void) {
     if (!hostHasBundle())
         return PERMISSION_NOT_DETERMINED;
     return mapAV([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio]);
 }
 
+/** Reads the current Contacts authorization status. */
 static PermissionStatus statusContacts(void) {
     if (!hostHasBundle())
         return PERMISSION_NOT_DETERMINED;
     return mapCN([CNContactStore authorizationStatusForEntityType:CNEntityTypeContacts]);
 }
 
+/** Reads the current Calendar authorization status. */
 static PermissionStatus statusCalendar(void) {
     if (!hostHasBundle())
         return PERMISSION_NOT_DETERMINED;
     return mapEK([EKEventStore authorizationStatusForEntityType:EKEntityTypeEvent]);
 }
 
+/** Reads the current Photos authorization status. */
 static PermissionStatus statusPhotos(void) {
     if (!hostHasBundle())
         return PERMISSION_NOT_DETERMINED;
@@ -180,6 +189,7 @@ static PermissionStatus statusPhotos(void) {
     return PERMISSION_NOT_DETERMINED;
 }
 
+/** Reads the current Location authorization status. */
 static PermissionStatus statusLocation(void) {
     if (!hostHasBundle())
         return PERMISSION_NOT_DETERMINED;
@@ -197,6 +207,7 @@ static bool requestCamera(void) {
     return true;
 }
 
+/** Requests microphone access using AVFoundation's authorization API. */
 static bool requestMicrophone(void) {
     if (!hostHasBundle())
         return false;
@@ -205,6 +216,7 @@ static bool requestMicrophone(void) {
     return true;
 }
 
+/** Requests Contacts access using the Contacts framework. */
 static bool requestContacts(void) {
     if (!hostHasBundle())
         return false;
@@ -218,6 +230,7 @@ static bool requestContacts(void) {
     return true;
 }
 
+/** Requests Calendar access using EventKit. */
 static bool requestCalendar(void) {
     if (!hostHasBundle())
         return false;
@@ -241,6 +254,7 @@ static bool requestCalendar(void) {
     return true;
 }
 
+/** Requests Photos access using Photos framework authorization. */
 static bool requestPhotos(void) {
     if (!hostHasBundle())
         return false;
@@ -253,6 +267,7 @@ static bool requestPhotos(void) {
     return true;
 }
 
+/** Requests Location authorization from the shared Core Location manager. */
 static bool requestLocation(void) {
     if (!hostHasBundle())
         return false;
@@ -262,6 +277,7 @@ static bool requestLocation(void) {
     return true;
 }
 
+/** Requests notification authorization through UserNotifications. */
 static bool requestNotifications(void) {
     if (!hostHasBundle())
         return false;
@@ -298,6 +314,7 @@ PermissionStatus permissionBackendStatus(PermissionKind kind) {
     }
 }
 
+/** Dispatches a permission request to the matching Cocoa authorization flow. */
 bool permissionBackendRequest(PermissionKind kind) {
     switch (kind) {
         case PERMISSION_SCREEN_CAPTURE: return CGRequestScreenCaptureAccess();
@@ -330,6 +347,7 @@ bool permissionBackendRequiresRestart(PermissionKind kind) {
     return kind == PERMISSION_SCREEN_CAPTURE;
 }
 
+/** Opens the appropriate System Settings privacy pane for the permission kind. */
 bool permissionBackendOpenSettings(PermissionKind kind) {
     const char *pane = nullptr;
     switch (kind) {
