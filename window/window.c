@@ -184,6 +184,7 @@
 ;;DRAFT
 
 ;;;;INCOMPLETE // CreateWindowEx; returns nullptr until implemented.
+/** Windows draft stub: returns nullptr until native window creation is implemented. */
 Window *Window_create(const char *title, int width, int height) {
     (void) title;
     (void) width;
@@ -192,159 +193,214 @@ Window *Window_create(const char *title, int width, int height) {
 }
 
 ;;INCOMPLETE // DestroyWindow; no-op until implemented.
+/** Windows draft stub: does not destroy a native window yet. */
 void Window_destroy(Window *window) {
     (void) window;
 }
 
+// Compatibility entry point; this stub backend has no registered windows to destroy.
+/** Windows draft stub: has no windows to destroy. */
 void Window_destroyAll(void) {
 }
 
 ;;INCOMPLETE // Poll WM_QUIT; false until implemented.
+/** Windows draft stub: reports that no close request is pending. */
 bool Window_shouldClose(Window *window) {
     (void) window;
     return false;
 }
 
+// Store the requested close state; the incomplete backend has no native window state.
+/** Windows draft stub: ignores close-state updates. */
 void Window_setShouldClose(Window *window, bool shouldClose) {
     (void) window;
     (void) shouldClose;
 }
 
 ;;INCOMPLETE // PeekMessage/TranslateMessage/DispatchMessage loop; no-op until implemented.
+/** Windows draft stub: does not pump native messages. */
 void Window_pollEvents(void) {
 }
 
+// Perform the available event poll and report that no further event is pending.
+/** Pumps the stub event function and reports no event. */
 bool Window_pollEventStep(void) {
     Window_pollEvents();
     return false;
 }
 
 ;;INCOMPLETE // DXGI swap interval; no-op until implemented.
+/** Windows draft stub: ignores presentation mode changes. */
 void Window_setPresentMode(Window *window, int mode) {
     (void) window;
     (void) mode;
 }
 
+// Return FIFO as the safe present-mode default for the unimplemented backend.
+/** Returns FIFO because this backend does not implement presentation modes. */
 int Window_getPresentMode(const Window *window) {
     (void) window;
     return WINDOW_PRESENT_FIFO;
 }
 
 ;;INCOMPLETE // Layered window alpha; no-op until implemented.
+/** Windows draft stub: ignores transparency changes. */
 void Window_setTransparent(Window *window, bool transparent) {
     (void) window;
     (void) transparent;
 }
 
+// Report the stub backend's default opaque-window state.
+/** Returns false because transparency state is not implemented. */
 bool Window_isTransparent(const Window *window) {
     (void) window;
     return false;
 }
 
+// Return the unchanged render-policy generation for this stub backend.
+/** Returns zero because this stub does not track render generations. */
 uint64_t Window_renderGeneration(const Window *window) {
     (void) window;
     return 0;
 }
 
 ;;INCOMPLETE // Input kill switch; no-op until implemented.
+/** Windows draft stub: ignores enabled-state changes. */
 void Window_setEnabled(Window *window, bool enabled) {
     (void) window;
     (void) enabled;
 }
 
+// Report the stub's permissive default input-enabled state.
+/** Returns the stub's default enabled state. */
 bool Window_isEnabled(const Window *window) {
     (void) window;
     return true;
 }
 
 ;;INCOMPLETE // SetWindowTextA; no-op until implemented.
+/** Windows draft stub: ignores title changes. */
 void Window_setTitle(Window *window, const char *title) {
     (void) window;
     (void) title;
 }
 
 ;;INCOMPLETE // SetWindowPos; no-op until implemented.
+/** Windows draft stub: ignores pixel-size changes. */
 void Window_setSize(Window *window, int width, int height) {
     (void) window;
     (void) width;
     (void) height;
 }
 
+// Report the unit scale used by this platform stub.
+/** Returns the unit scale used by this unimplemented backend. */
 float Window_getScale(const Window *window) {
     (void) window;
     return 1.0f;
 }
 
+// Provide the platform revalidation seam without native display state.
+/** Windows draft stub: has no native geometry to revalidate. */
 void Window_revalidate(Window *window) {
     (void) window;
 }
 
+// Accept the logical-size API seam; this backend does not retain geometry.
+/** Windows draft stub: ignores point-size changes. */
 void Window_setSizePoints(Window *window, float width, float height) {
     (void) window;
     (void) width;
     (void) height;
 }
 
+// Return zero logical dimensions because the stub creates no native window.
+/** Writes zero dimensions to supplied outputs. */
 void Window_getSizePoints(const Window *window, float *outWidth, float *outHeight) {
     (void) window;
     if (outWidth) *outWidth = 0.0f;
     if (outHeight) *outHeight = 0.0f;
 }
 
+// Return the stub window's logical width, which is always zero.
+/** Returns zero because point width is unavailable in this stub. */
 float Window_widthPoints(const Window *window) {
     (void) window;
     return 0.0f;
 }
 
+// Return the stub window's logical height, which is always zero.
+/** Returns zero because point height is unavailable in this stub. */
 float Window_heightPoints(const Window *window) {
     (void) window;
     return 0.0f;
 }
 
+// Expose the window width through the viewport compatibility accessor.
+/** Returns the window pixel width through the shared accessor. */
 int Window_viewportWidth(const Window *window) {
     return Window_width((Window*) window);
 }
 
+// Expose the window height through the viewport compatibility accessor.
+/** Returns the window pixel height through the shared accessor. */
 int Window_viewportHeight(const Window *window) {
     return Window_height((Window*) window);
 }
 
+// Expose the logical width through the viewport compatibility accessor.
+/** Returns the window point width through the shared accessor. */
 float Window_viewportWidthPoints(const Window *window) {
     return Window_widthPoints(window);
 }
 
+// Expose the logical height through the viewport compatibility accessor.
+/** Returns the window point height through the shared accessor. */
 float Window_viewportHeightPoints(const Window *window) {
     return Window_heightPoints(window);
 }
 
+// Alias the client width as the full window width in this stub.
+/** Returns the window pixel width through the shared accessor. */
 int Window_windowWidth(const Window *window) {
     return Window_width((Window*) window);
 }
 
+// Alias the client height as the full window height in this stub.
+/** Returns the window pixel height through the shared accessor. */
 int Window_windowHeight(const Window *window) {
     return Window_height((Window*) window);
 }
 
+// Alias the logical client width as the full window width.
+/** Returns the window point width through the shared accessor. */
 float Window_windowWidthPoints(const Window *window) {
     return Window_widthPoints(window);
 }
 
+// Alias the logical client height as the full window height.
+/** Returns the window point height through the shared accessor. */
 float Window_windowHeightPoints(const Window *window) {
     return Window_heightPoints(window);
 }
 
 ;;INCOMPLETE // SetWindowPos; no-op until implemented.
+/** Windows draft stub: ignores location changes. */
 void Window_setLocation(Window *window, int x, int y) {
     (void) window;
     (void) x;
     (void) y;
 }
 
+// Return zero content-origin coordinates for the unimplemented backend.
+/** Writes zero content-origin coordinates to supplied outputs. */
 void Window_getContentOrigin(const Window *window, int *outX, int *outY) {
     if (outX) *outX = 0;
     if (outY) *outY = 0;
 }
 
+// Accept but do not retain the resize callback on this stub platform.
+/** Windows draft stub: does not retain a resize-render callback. */
 void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *userdata) {
     (void) window;
     (void) fn;
@@ -352,123 +408,156 @@ void Window_setResizeRenderHook(Window *window, WindowResizeRenderFn fn, void *u
 }
 
 ;;INCOMPLETE // No hook slot on the stub platform; nullptr until implemented.
+/** Returns nullptr because this stub has no resize-render hook storage. */
 WindowResizeRenderFn Window_getResizeRenderHook(const Window *window) {
     (void) window;
     return nullptr;
 }
 
+// Return zero because this backend does not resolve monitor identities.
+/** Returns zero because monitor identity is not implemented. */
 uint32_t Window_getMonitorId(const Window *window) {
     (void) window;
     return 0;
 }
 
 ;;INCOMPLETE // GetWindowRect top-left; zeros until implemented.
+/** Writes zero location coordinates to supplied outputs. */
 void Window_getLocation(const Window *window, int *outX, int *outY) {
     if (outX) *outX = 0;
     if (outY) *outY = 0;
 }
 
 ;;INCOMPLETE // CenterWindow; no-op until implemented.
+/** Windows draft stub: does not reposition a native window. */
 void Window_center(Window *window) {
     (void) window;
 }
 
 ;;INCOMPLETE // ShowWindow(SW_SHOW)/ShowWindow(SW_HIDE); no-op until implemented.
+/** Windows draft stub: ignores visibility changes. */
 void Window_setVisible(Window *window, bool visible) {
     (void) window;
     (void) visible;
 }
 
 ;;INCOMPLETE // GWL_STYLE WS_THICKFRAME; false until implemented.
+/** Returns false because resizability is not implemented. */
 bool Window_isResizable(Window *window) {
     (void) window;
     return false;
 }
 
 ;;INCOMPLETE // SetWindowLong(GWL_STYLE, WS_THICKFRAME); no-op until implemented.
+/** Windows draft stub: ignores resizability changes. */
 void Window_setResizable(Window *window, bool resizable) {
     (void) window;
     (void) resizable;
 }
 
 ;;INCOMPLETE // GWL_STYLE WS_SYSMENU; false until implemented.
+/** Returns false because closability is not implemented. */
 bool Window_isClosable(Window *window) {
     (void) window;
     return false;
 }
 
 ;;INCOMPLETE // SetWindowLong(GWL_STYLE, WS_SYSMENU); no-op until implemented.
+/** Windows draft stub: ignores closability changes. */
 void Window_setClosable(Window *window, bool closable) {
     (void) window;
     (void) closable;
 }
 
 ;;INCOMPLETE // GWL_STYLE WS_MINIMIZEBOX; false until implemented.
+/** Returns false because miniaturization is not implemented. */
 bool Window_isMiniaturizable(Window *window) {
     (void) window;
     return false;
 }
 
 ;;INCOMPLETE // SetWindowLong(GWL_STYLE, WS_MINIMIZEBOX); no-op until implemented.
+/** Windows draft stub: ignores miniaturization changes. */
 void Window_setMiniaturizable(Window *window, bool miniaturizable) {
     (void) window;
     (void) miniaturizable;
 }
 
 ;;INCOMPLETE // WS_MAXIMIZEBOX semantics; no-op until implemented.
+/** Windows draft stub: ignores the fullscreen-button setting. */
 void Window_setFullscreenButton(Window *window, bool enabled) {
     (void) window;
     (void) enabled;
 }
 
 ;;INCOMPLETE // Fullscreen/borderless chrome switch; no-op until implemented.
+/** Windows draft stub: ignores decoration-mode changes. */
 void Window_setUndecorated(Window *window, int mode) {
     (void) window;
     (void) mode;
 }
 
+// Map the boolean decoration request onto the undecorated-mode API.
+/** Selects decorated or borderless mode through the draft mode setter. */
 void Window_setDecorated(Window *window, bool decorated) {
     Window_setUndecorated(window, decorated ? WINDOW_DECORATED : WINDOW_UNDECORATED_BORDERLESS);
 }
 
+// Report the stub's default decorated state.
+/** Returns the draft backend's decorated default. */
 bool Window_isDecorated(const Window *window) {
     (void) window;
     return true;
 }
 
+// Map the naked-titlebar request onto the undecorated-mode API.
+/** Selects naked or decorated mode through the draft mode setter. */
 void Window_setNaked(Window *window, bool naked) {
     Window_setUndecorated(window, naked ? WINDOW_UNDECORATED_NAKED : WINDOW_DECORATED);
 }
 
+// Report that the stub does not provide naked chrome.
+/** Returns false because naked-mode state is not retained. */
 bool Window_isNaked(const Window *window) {
     (void) window;
     return false;
 }
 
+// Map the borderless request onto the undecorated-mode API.
+/** Selects borderless or decorated mode through the draft mode setter. */
 void Window_setBorderless(Window *window, bool borderless) {
     Window_setUndecorated(window, borderless ? WINDOW_UNDECORATED_BORDERLESS : WINDOW_DECORATED);
 }
 
+// Report that the stub does not provide borderless chrome.
+/** Returns false because borderless state is not retained. */
 bool Window_isBorderless(const Window *window) {
     (void) window;
     return false;
 }
 
+// Accept the titlebar-flush request; the incomplete backend stores no chrome state.
+/** Windows draft stub: ignores viewport flush alignment. */
 void Window_setViewportFlushToTop(Window *window, bool flush) {
     (void) window;
     (void) flush;
 }
 
+// Report that viewport flush-to-top is unavailable in the stub backend.
+/** Returns false because viewport alignment state is not retained. */
 bool Window_isViewportFlushToTop(const Window *window) {
     (void) window;
     return false;
 }
 
+// Forward the compatibility request to the viewport-flush setter.
+/** Maps the compatibility floating setting to viewport flush behavior. */
 void Window_setFloatingTrafficLights(Window *window, bool floating) {
     Window_setViewportFlushToTop(window, floating);
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32: needs a Mac to mean anything.
+/** Reports the unsupported macOS-only operation to stderr. */
 void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLight light, bool visible) {
     (void) window;
     (void) light;
@@ -477,6 +566,7 @@ void Window_macOS_setTrafficLightButtonVisible(Window *window, WindowTrafficLigh
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+/** Reports the unsupported query and returns false. */
 bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTrafficLight light) {
     (void) window;
     (void) light;
@@ -485,6 +575,7 @@ bool Window_macOS_isTrafficLightButtonVisible(const Window *window, WindowTraffi
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+/** Reports the unsupported macOS-only operation to stderr. */
 void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y) {
     (void) window;
     (void) x;
@@ -493,6 +584,7 @@ void Window_macOS_setTrafficLightHeaderPosition(Window *window, float x, float y
 }
 
 ;;PLATFORM_EXCLUSIVE("macOS") // No traffic lights on Win32.
+/** Reports the unsupported query and writes zero to supplied outputs. */
 void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *outX, float *outY) {
     (void) window;
     fprintf(stderr, "window: Window_macOS_getTrafficLightHeaderPosition is macOS-only (needs a Mac machine)\n");
@@ -503,45 +595,53 @@ void Window_macOS_getTrafficLightHeaderPosition(const Window *window, float *out
 }
 
 ;;INCOMPLETE // ShowWindow(SW_MINIMIZE); no-op until implemented.
+/** Windows draft stub: does not minimize a native window. */
 void Window_minimize(Window *window) {
     (void) window;
 }
 
 ;;INCOMPLETE // ShowWindow(SW_RESTORE); no-op until implemented.
+/** Windows draft stub: does not restore a native window. */
 void Window_restore(Window *window) {
     (void) window;
 }
 
 ;;INCOMPLETE // IsIconic; false until implemented.
+/** Returns false because minimized state is not implemented. */
 bool Window_isMinimized(Window *window) {
     (void) window;
     return false;
 }
 
 ;;INCOMPLETE // GWL_STYLE WS_MAXIMIZE; false until implemented.
+/** Returns false because fullscreen state is not implemented. */
 bool Window_isFullscreen(Window *window) {
     (void) window;
     return false;
 }
 
 ;;INCOMPLETE // ShowWindow(SW_MAXIMIZE) vs SW_RESTORE; no-op until implemented.
+/** Windows draft stub: ignores fullscreen changes. */
 void Window_setFullscreen(Window *window, bool fullscreen) {
     (void) window;
     (void) fullscreen;
 }
 
 ;;INCOMPLETE // Window setFullscreen wrapper; no-op until implemented.
+/** Windows draft stub: does not toggle fullscreen state. */
 void Window_toggleFullscreen(Window *window) {
     (void) window;
 }
 
 ;;INCOMPLETE // SetWindowDisplayAffinity(WDA_MONITOR/WDA_NONE); no-op until implemented.
+/** Windows draft stub: ignores display-recording protection changes. */
 void Window_setDRM(Window *window, bool enabled) {
     (void) window;
     (void) enabled;
 }
 
 ;;INCOMPLETE // AdjustWindowRectEx + GetWindowRect; no-op until implemented.
+/** Windows draft stub: ignores minimum-size constraints. */
 void Window_setMinSize(Window *window, int width, int height) {
     (void) window;
     (void) width;
@@ -549,6 +649,7 @@ void Window_setMinSize(Window *window, int width, int height) {
 }
 
 ;;INCOMPLETE // AdjustWindowRectEx + GetWindowRect; no-op until implemented.
+/** Windows draft stub: ignores maximum-size constraints. */
 void Window_setMaxSize(Window *window, int width, int height) {
     (void) window;
     (void) width;
@@ -556,29 +657,36 @@ void Window_setMaxSize(Window *window, int width, int height) {
 }
 
 ;;INCOMPLETE // SetCursor; no-op until implemented.
+/** Windows draft stub: ignores cursor changes. */
 void Window_setCursorType(Window *window, WindowCursorType type) {
     (void) window;
     (void) type;
 }
 
 ;;INCOMPLETE // GetCursor; returns default until implemented.
+/** Returns the default cursor because cursor state is not tracked. */
 WindowCursorType Window_getCursorType(const Window *window) {
     (void) window;
     return WINDOW_CURSOR_DEFAULT;
 }
 
 ;;INCOMPLETE // Board composite; no-op until implemented.
+/** Windows draft stub: does not composite board content. */
 void Window_compositeBoards(Window *window) {
     (void) window;
 }
 
 ;;INCOMPLETE
+// Return no content-view handle because this platform implementation is a stub.
+/** Returns nullptr because the stub has no native content view. */
 void *Window_contentView(Window *window) {
     (void) window;
     return nullptr;
 }
 
 ;;INCOMPLETE
+// Return no native handle because the stub never creates an operating-system window.
+/** Returns nullptr because the stub has no native window handle. */
 void *Window_nativeHandle(const Window *window) {
     (void) window;
     return nullptr;

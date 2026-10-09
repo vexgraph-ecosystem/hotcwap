@@ -101,6 +101,7 @@ extern void *MemoryArena_alloc(void *arena, uint64_t typeId, size_t numBytes);
 extern void MemoryArena_free(void *arena, void *ptr);
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Creates persistent and transient arenas, substituting defaults for zero sizes. */
 Lifetime Lifetime_create(size_t persistentBytes, size_t transientBytes) {
     Lifetime lt = {0};
     if (persistentBytes == 0)
@@ -133,6 +134,7 @@ Lifetime Lifetime_create(size_t persistentBytes, size_t transientBytes) {
     return lt;
 }
 
+/** Wraps externally supplied arenas only when their pointers and type IDs validate. */
 Lifetime Lifetime_bind(void *persistentArena, void *transientArena,
                        uint64_t persistentType, uint64_t transientType,
                        void *relational) {
@@ -151,6 +153,7 @@ Lifetime Lifetime_bind(void *persistentArena, void *transientArena,
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Checks non-null, 16-byte alignment, and the minimum user-address threshold. */
 bool Lifetime_isLegit(const void *ptr) {
     if (ptr == nullptr) {
         return false;
@@ -167,6 +170,7 @@ bool Lifetime_isLegit(const void *ptr) {
     return true;
 }
 
+/** Validates both arena handles, their attestations, and an optional relational root. */
 bool Lifetime_isValid(const Lifetime *lifetime) {
     if (lifetime == nullptr) {
         return false;
@@ -186,6 +190,7 @@ bool Lifetime_isValid(const Lifetime *lifetime) {
     return true;
 }
 
+/** Destroys valid transient and persistent arenas and clears the record fields. */
 void Lifetime_destroy(Lifetime *lifetime) {
     if (lifetime == nullptr)
         return;
@@ -206,12 +211,14 @@ void Lifetime_destroy(Lifetime *lifetime) {
     (*lifetime).relational = nullptr;
 }
 
+/** Releases all allocations from the valid transient arena. */
 void Lifetime_resetTransient(Lifetime *lifetime) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).transientArena))
         return;
     MemoryArena_freeAll((*lifetime).transientArena);
 }
 
+/** Allocates typed bytes from the persistent arena and validates the result pointer. */
 void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t Bytes) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).persistentArena))
         return nullptr;
@@ -222,6 +229,7 @@ void *Lifetime_allocPersistent(Lifetime *lifetime, uint64_t typeId, size_t Bytes
     return ptr;
 }
 
+/** Allocates typed bytes from the transient arena and validates the result pointer. */
 void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t Bytes) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).transientArena))
         return nullptr;
@@ -232,9 +240,9 @@ void *Lifetime_allocTransient(Lifetime *lifetime, uint64_t typeId, size_t Bytes)
     return ptr;
 }
 
+/** Frees a validated pointer through the persistent arena. */
 void Lifetime_freePersistent(Lifetime *lifetime, void *ptr) {
     if (lifetime == nullptr || !Lifetime_isLegit((*lifetime).persistentArena) || !Lifetime_isLegit(ptr))
         return;
     MemoryArena_free((*lifetime).persistentArena, ptr);
 }
-

@@ -116,6 +116,7 @@ static void probeOnce(void) {
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Returns whether a valid capability kind is present in the cached probe. */
 bool Capability_has(CapabilityKind kind) {
     if ((int) kind < 0 || kind >= CAPABILITY_COUNT)
         return false;
@@ -123,10 +124,12 @@ bool Capability_has(CapabilityKind kind) {
     return (s_bits & ((uint64_t) 1 << (int) kind)) != 0;
 }
 
+/** Performs the idempotent cold host capability probe. */
 void Capability_probe(void) {
     probeOnce();
 }
 
+/** Returns the cached operating-system major version, or zero when unknown. */
 int Capability_osMajor(void) {
     probeOnce();
     return s_osMajor;
@@ -134,6 +137,7 @@ int Capability_osMajor(void) {
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Returns the symbolic name for a capability kind, or the unknown label. */
 const char *Capability_kindName(CapabilityKind kind) {
     switch (kind) {
         case CAPABILITY_CPU_DOTPROD: return "CAPABILITY_CPU_DOTPROD";

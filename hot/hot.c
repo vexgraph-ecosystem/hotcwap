@@ -240,6 +240,7 @@ static HotModuleInternal *find_module(HotModule *hot, const char *name) {
 static void *save_worker_main(void *arg);
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Creates a loader bound to a mounted manifest library and starts its save worker. */
 HotModule *Hot_init(const char *library) {
     if (!library || *library == '\0')
         return nullptr;
@@ -286,6 +287,7 @@ static void save_worker_shutdown(HotModule *hot) {
     (*hot).saveWorkerLive = false;
 }
 
+/** Stops the state-save worker, closes loaded modules, drains retired handles, and frees. */
 void HotShutdown(HotModule *hot) {
     if (!hot)
         return;
@@ -443,6 +445,7 @@ static bool hot_copy_file(const char *src, const char *dst) {
     return ok;
 }
 
+/** Stages and validates every section, restores saved state, then commits the generation. */
 static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outLoaded) {
     HotTrampolineTable *table = &(*hot).trampolines;
     HotRetireRing *ring = &(*hot).retireRing;
@@ -654,6 +657,7 @@ static HotResult perform_swap(HotModule *hot, const char *libDir, uint32_t *outL
     return HOT_OK;
 }
 
+/** Advances retirement and handles initial load, pending snapshot, or generation reload. */
 HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
     if (loaded_count)
         (*loaded_count) = 0;   // always define the out-count, even on rejection
@@ -701,6 +705,7 @@ HotResult Hot_poll(HotModule *hot, uint32_t *loaded_count) {
     return perform_swap(hot, libDir, loaded_count); // nothing save-capable
 }
 
+/** Invokes the named loaded module's optional shutdown export. */
 void Hot_shutdown_module(HotModule *hot, const char *module_name) {
     if (!hot || !module_name)
         return;
@@ -713,6 +718,7 @@ void Hot_shutdown_module(HotModule *hot, const char *module_name) {
         shutdown();
 }
 
+/** Calls the named loaded module's state-save export into the caller's buffer. */
 bool Hot_save_module(HotModule *hot, const char *module_name, void *buf, size_t cap, size_t *outLen) {
     if (!hot || !module_name || !buf || !outLen)
         return false;
@@ -726,6 +732,7 @@ bool Hot_save_module(HotModule *hot, const char *module_name, void *buf, size_t 
     return save(buf, cap, outLen);
 }
 
+/** Calls the named loaded module's state-restore export with the supplied bytes. */
 bool Hot_restore_module(HotModule *hot, const char *module_name, const void *buf, size_t len) {
     if (!hot || !module_name || !buf)
         return false;
@@ -739,6 +746,7 @@ bool Hot_restore_module(HotModule *hot, const char *module_name, const void *buf
     return restore(buf, len);
 }
 
+/** Calls the named loaded module's migration export into the caller's destination. */
 bool Hot_migrate_module(HotModule *hot, const char *module_name, const char *oldVersion,
                         const void *oldBuf, size_t oldLen, void *newBuf, size_t newCap, size_t *outLen) {
     if (!hot || !module_name || !oldVersion || !oldBuf || !newBuf || !outLen)
@@ -755,6 +763,7 @@ bool Hot_migrate_module(HotModule *hot, const char *module_name, const char *old
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Resolves a registered symbol through the current trampoline table. */
 HotFn Hot_get_symbol(HotModule *hot, const char *name) {
     if (!hot || !name)
         return nullptr;
@@ -768,11 +777,13 @@ HotFn Hot_get_symbol(HotModule *hot, const char *name) {
 }
 
 ;;GETTER
+/** Returns the last successfully committed manifest generation. */
 uint64_t Hot_get_generation(const HotModule *hot) {
     return hot ? (*hot).generation : 0;
 }
 
 ;;GETTER
+/** Returns the loader's last diagnostic, or a fixed message for null. */
 const char *Hot_last_error(HotModule *hot) {
     if (!hot)
         return "NULL hot module";

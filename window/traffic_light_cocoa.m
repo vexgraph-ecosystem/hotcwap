@@ -73,6 +73,7 @@ struct TrafficLight {
     NSRect lightBase[TRAFFIC_LIGHT_COUNT];
 };
 
+/** Creates a traffic-light adapter for the supplied native window handle. */
 TrafficLight *TrafficLight_create(void *nsWindowHandle) {
     TrafficLight *self = (TrafficLight*) calloc(1, sizeof(TrafficLight));
     if (self == nullptr)
@@ -88,16 +89,19 @@ TrafficLight *TrafficLight_create(void *nsWindowHandle) {
     return self;
 }
 
+/** Releases adapter-owned bookkeeping without destroying the native window. */
 void TrafficLight_destroy(TrafficLight *self) {
     if (self != nullptr)
         free(self);
 }
 
+/** Recomputes the traffic-light buttons' base positions from the native window. */
 void TrafficLight_resetBase(TrafficLight *self) {
     if (self != nullptr)
         (*self).lightBaseSet = false;
 }
 
+/** Applies the adapter's current visibility, position, and floating settings. */
 void TrafficLight_refresh(TrafficLight *self) {
     if (self == nullptr || (*self).window == nil)
         return;
@@ -129,6 +133,7 @@ void TrafficLight_refresh(TrafficLight *self) {
     }
 }
 
+/** Shows or hides the selected native traffic-light button. */
 void TrafficLight_setButtonVisible(TrafficLight *self, TrafficLightButton button, bool visible) {
     if (self == nullptr || (int) button < 0 || button >= TRAFFIC_LIGHT_COUNT)
         return;
@@ -136,12 +141,14 @@ void TrafficLight_setButtonVisible(TrafficLight *self, TrafficLightButton button
     TrafficLight_refresh(self);
 }
 
+/** Reports whether the selected button is configured as visible. */
 bool TrafficLight_isButtonVisible(const TrafficLight *self, TrafficLightButton button) {
     if (self == nullptr || (int) button < 0 || button >= TRAFFIC_LIGHT_COUNT)
         return false;
     return (*self).lightVisible[button];
 }
 
+/** Sets the header-relative position used by the adapter. */
 void TrafficLight_setHeaderPosition(TrafficLight *self, float x, float y) {
     if (self == nullptr || (*self).window == nil)
         return;
@@ -165,6 +172,7 @@ void TrafficLight_setHeaderPosition(TrafficLight *self, float x, float y) {
     }
 }
 
+/** Returns the configured header-relative position through optional outputs. */
 void TrafficLight_getHeaderPosition(const TrafficLight *self, float *outX, float *outY) {
     float x = 0.0f;
     float y = 0.0f;
@@ -188,6 +196,7 @@ void TrafficLight_getHeaderPosition(const TrafficLight *self, float *outX, float
         *outY = y;
 }
 
+/** Enables or disables floating behavior for the native traffic-light buttons. */
 void TrafficLight_setFloating(TrafficLight *self, bool floating) {
     if (self == nullptr || (*self).window == nil)
         return;

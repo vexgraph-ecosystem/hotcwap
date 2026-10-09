@@ -51,6 +51,7 @@
 
 // NAMES (portable)
 ;;GETTER
+/** Returns the symbolic name for a permission kind, or the unknown label. */
 const char *Permission_kindName(PermissionKind kind) {
     switch (kind) {
         case PERMISSION_SCREEN_CAPTURE: return "PERMISSION_SCREEN_CAPTURE";
@@ -71,6 +72,7 @@ const char *Permission_kindName(PermissionKind kind) {
 }
 
 ;;GETTER
+/** Returns the symbolic name for a permission status, or the unknown label. */
 const char *Permission_statusName(PermissionStatus status) {
     switch (status) {
         case PERMISSION_UNSUPPORTED:    return "UNSUPPORTED";
@@ -83,24 +85,28 @@ const char *Permission_statusName(PermissionStatus status) {
 }
 
 // PUBLIC API (portable dispatch — bounds-checked once, then the backend decides)
+/** Queries a permission through the platform backend, or reports unsupported. */
 PermissionStatus Permission_status(PermissionKind kind) {
     if ((int) kind < 0 || kind >= PERMISSION_COUNT)
         return PERMISSION_UNSUPPORTED;
     return permissionBackendStatus(kind);
 }
 
+/** Requests the specified permission through the platform backend. */
 bool Permission_request(PermissionKind kind) {
     if ((int) kind < 0 || kind >= PERMISSION_COUNT)
         return false;
     return permissionBackendRequest(kind);
 }
 
+/** Reports whether a permission grant requires an application restart. */
 bool Permission_requiresRestart(PermissionKind kind) {
     if ((int) kind < 0 || kind >= PERMISSION_COUNT)
         return false;
     return permissionBackendRequiresRestart(kind);
 }
 
+/** Opens the platform settings surface for the requested permission, if available. */
 bool Permission_openSettings(PermissionKind kind) {
     if ((int) kind < 0 || kind >= PERMISSION_COUNT)
         return false;
@@ -109,18 +115,22 @@ bool Permission_openSettings(PermissionKind kind) {
 
 // PORTABLE BACKEND (non-Apple): the kind exists, the host has no concept yet.
 #if !defined(__APPLE__)
+/** Non-Apple fallback: reports every permission as unsupported. */
 PermissionStatus permissionBackendStatus(PermissionKind kind) {
     (void) kind;
     return PERMISSION_UNSUPPORTED;
 }
+/** Non-Apple fallback: no permission request backend is available. */
 bool permissionBackendRequest(PermissionKind kind) {
     (void) kind;
     return false;
 }
+/** Non-Apple fallback: no request can require an OS restart. */
 bool permissionBackendRequiresRestart(PermissionKind kind) {
     (void) kind;
     return false;
 }
+/** Non-Apple fallback: no platform settings surface is provided. */
 bool permissionBackendOpenSettings(PermissionKind kind) {
     (void) kind;
     return false;

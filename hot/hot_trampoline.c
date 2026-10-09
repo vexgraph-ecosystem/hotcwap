@@ -81,6 +81,7 @@
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
 // Register a row for a function. Returns the row index.
+/** Adds a named trampoline row and returns its index, or a negative result. */
 int HotTrampolineTable_register(HotTrampolineTable *self, const char *name) {
     if (!self || !name) return -1;
     uint32_t idx = atomic_fetch_add(&(*self).count, 1);
@@ -94,6 +95,7 @@ int HotTrampolineTable_register(HotTrampolineTable *self, const char *name) {
 }
 
 // Set a row's function pointer atomically.
+/** Replaces the function pointer stored at a valid trampoline index. */
 void HotTrampolineTable_set(HotTrampolineTable *self, int idx, void *ptr) {
     if (!self) return;
     if (idx < 0 || idx >= (int)atomic_load(&(*self).count)) return;
@@ -106,6 +108,7 @@ void HotTrampolineTable_set(HotTrampolineTable *self, int idx, void *ptr) {
 }
 
 // Find a row by name. Returns -1 if not found.
+/** Finds a registered symbol by name and returns its row index. */
 int HotTrampolineTable_find(HotTrampolineTable *self, const char *name) {
     if (!self || !name) return -1;
     uint32_t count = atomic_load(&(*self).count);

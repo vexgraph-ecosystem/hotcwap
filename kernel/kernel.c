@@ -189,14 +189,17 @@
 
 
 // CONSTRUCTORS
+/** Creates a kernel with the named default persistent and transient arena sizes. */
 Kernel *Kernel_0(void) {
     return Kernel_2(KERNEL_ARENA_DEFAULT, KERNEL_TRANSIENT_DEFAULT);
 }
 
+/** Creates a kernel with a caller-selected persistent arena size. */
 Kernel *Kernel_1(size_t arenaBytes) {
     return Kernel_2(arenaBytes, KERNEL_TRANSIENT_DEFAULT);
 }
 
+/** Allocates the supervisor and its persistent/transient lifetime arenas. */
 Kernel *Kernel_2(size_t arenaBytes, size_t transientBytes) {
     Kernel *self = (Kernel*) calloc(1, sizeof(Kernel));
     if (!self)
@@ -238,6 +241,7 @@ static void kernelFireEndHooks(Kernel *self);
 static void *kernelRunWorkerMain(void *arg);
 
 // CORE FUNCTIONS
+/** Stops admission and frees an idle, empty kernel; refuses while busy or registered. */
 bool Kernel_free(Kernel *self) {
     if (!self)
         return false;
@@ -305,12 +309,14 @@ bool Kernel_free(Kernel *self) {
     return true;
 }
 
+/** Compatibility destructor that forwards to Kernel_free. */
 void Kernel_destroy(Kernel *self) {
     if (!self)
         return;
     (void) Kernel_free(self);
 }
 
+/** Requests draining and stops active applications and consoles. */
 void Kernel_stop(Kernel *self) {
     if (!self)
         return;
@@ -344,18 +350,21 @@ void Kernel_stop(Kernel *self) {
     // DRAINING: the arming thread already owns teardown; nothing to do.
 }
 
+/** Returns the atomic lifecycle phase, or READY for a null kernel. */
 KernelPhase Kernel_getPhase(const Kernel *self) {
     if (!self)
         return KERNEL_PHASE_READY;
     return (KernelPhase) atomic_load_explicit(&(*self).phase, memory_order_acquire);
 }
 
+/** Returns the atomic run flag, or false for a null kernel. */
 bool Kernel_isRunning(const Kernel *self) {
     if (!self)
         return false;
     return atomic_load_explicit(&(*self).running, memory_order_relaxed);
 }
 
+/** Invokes registered end callbacks once, guarded against repeated teardown. */
 static void kernelFireEndHooks(Kernel *self) {
     if (!self)
         return;
@@ -369,6 +378,7 @@ static void kernelFireEndHooks(Kernel *self) {
     }
 }
 
+/** Runs one registered worker callback and publishes its completion flag. */
 static void *kernelRunWorkerMain(void *arg) {
     KernelRunSlot *slot = (KernelRunSlot*) arg;
     if (slot && (*slot).fn) {
@@ -388,6 +398,7 @@ static void *kernelRunWorkerMain(void *arg) {
 // the registries (via drain), keeping iteration single-threaded per the
 // Tier-1 thread-safety half of the ;;INTENTION above.
 
+/** Reports whether the phase has left READY. */
 static bool kernelRunActive(const Kernel *self) {
     return atomic_load_explicit(&(*self).phase, memory_order_acquire) != KERNEL_PHASE_READY;
 }
@@ -395,6 +406,7 @@ static bool kernelRunActive(const Kernel *self) {
 // DRAINING is owned by the arming thread: no registration from any thread,
 // and nothing may grow a registry/slot table a joining worker still points
 // into. Callers already warn on refusal.
+/** Reports whether the kernel is in its teardown-owned draining phase. */
 static bool kernelDraining(const Kernel *self) {
     return atomic_load_explicit(&(*self).phase, memory_order_acquire) == KERNEL_PHASE_DRAINING;
 }
@@ -404,6 +416,7 @@ static bool kernelDraining(const Kernel *self) {
 // initial pass would).
 static void kernelStartApplication(Kernel *self, Application *a);
 
+/** Adds an application to the single-threaded registry if unique and within capacity. */
 static bool kernelAddApplicationInternal(Kernel *self, Application *app) {
     for (uint32_t i = 0; i < (*self).applicationCount; i++)
         if ((*self).applications[i] == app)
@@ -414,6 +427,7 @@ static bool kernelAddApplicationInternal(Kernel *self, Application *app) {
     return true;
 }
 
+/** Adds a process to the single-threaded registry if unique and within capacity. */
 static bool kernelAddProcessInternal(Kernel *self, Process *p) {
     for (uint32_t i = 0; i < (*self).processCount; i++)
         if ((*self).processes[i] == p)
@@ -424,6 +438,7 @@ static bool kernelAddProcessInternal(Kernel *self, Process *p) {
     return true;
 }
 
+/** Adds a console to the single-threaded registry if unique and within capacity. */
 static bool kernelAddConsoleInternal(Kernel *self, Console *c) {
     for (uint32_t i = 0; i < (*self).consoleCount; i++)
         if ((*self).consoles[i] == c)
@@ -437,6 +452,7 @@ static bool kernelAddConsoleInternal(Kernel *self, Console *c) {
 // Post a pending add from ANY thread (mutex-guarded, growable realloc — cold
 // path, never steady-state). The drain on Thread 0 steals the whole batch in
 // one lock and re-owns the arrays for the rest of the pass.
+/** Queues a registration request in the mutex-protected deferred mailbox. */
 static bool kernelPostDeferred(Kernel *self, KernelDeferredKind kind, void *ptr) {
     pthread_mutex_lock(&(*self).addLock);
     if ((*self).deferredCount == (*self).deferredCap) {
@@ -461,6 +477,7 @@ static bool kernelPostDeferred(Kernel *self, KernelDeferredKind kind, void *ptr)
 // it exactly like the initial pass would: processes invoke one-shot, consoles
 // spawn their session, applications start + show their windows. A kind that
 // fails the dup/full/guards stays unregistered and silent.
+/** Applies one queued add on the run thread, registering and starting its kind. */
 static void kernelApplyDeferred(Kernel *self, KernelDeferredKind kind, void *ptr) {
     switch (kind) {
         case KERNEL_DEFERRED_APPLICATION: {
@@ -491,6 +508,7 @@ static void kernelApplyDeferred(Kernel *self, KernelDeferredKind kind, void *ptr
 
 // Steal the whole pending batch under the lock, then apply each entry OUTSIDE
 // the lock — the run loop keeps iterating its own registry, never the mailbox.
+/** Takes and applies the current deferred batch outside the mailbox lock. */
 static void kernelDrainDeferred(Kernel *self) {
     pthread_mutex_lock(&(*self).addLock);
     KernelDeferred *batch = (*self).deferred;
@@ -511,6 +529,7 @@ static void kernelDrainDeferred(Kernel *self) {
 // The run ended (stop landed or all kinds done) — starting fresh work now
 // would outlive the stop, and DRAINING refuses new posts anyway, so anything
 // left was queued while RUNNING and never admitted. One warn per drop batch.
+/** Discards pending additions after run completion and reports a dropped batch. */
 static void kernelDropDeferred(Kernel *self) {
     pthread_mutex_lock(&(*self).addLock);
     KernelDeferred *batch = (*self).deferred;
@@ -530,6 +549,7 @@ static void kernelDropDeferred(Kernel *self) {
 // after the initial invoke pass (one-shot); consoles when their session
 // joined (Console_isRunning false); apps per the Application_isFinished
 // completion predicate (all windows closed or externally stopped).
+/** Checks application, console, and worker completion to decide reactor exit. */
 static bool kernelAllDone(const Kernel *self) {
     for (uint32_t i = 0; i < (*self).applicationCount; i++) {
         Application *a = (*self).applications[i];
@@ -552,6 +572,7 @@ static bool kernelAllDone(const Kernel *self) {
 // Start one app manifest NON-blocking: flip running, show every window. The
 // reactor supervises it to completion; the blocking Kernel_runApplication
 // path adds Application_run on top.
+/** Begins an application and shows its registered windows without blocking. */
 static void kernelStartApplication(Kernel *self, Application *a) {
     (void) self;
     if (!a)
@@ -574,6 +595,7 @@ static void kernelStartApplication(Kernel *self, Application *a) {
 // initial registrations, then runs a completion reactor until every kind is
 // done or Kernel_stop() lands.
 
+/** Arms supervision, dispatches registered work, services it, then joins workers. */
 int Kernel_runAll(Kernel *self) {
     if (!self)
         return KERNEL_EXIT_NO_APPS;
@@ -700,6 +722,7 @@ int Kernel_runAll(Kernel *self) {
     return rc;
 }
 
+/** Forwards one process invocation and returns its callback status or kernel error. */
 int Kernel_runProcess(Kernel *self, Process *p) {
     (void) self;
     if (!p)
@@ -710,6 +733,7 @@ int Kernel_runProcess(Kernel *self, Process *p) {
     return exitStatus;
 }
 
+/** Starts a console session through its configured IO seam. */
 bool Kernel_runConsole(Kernel *self, Console *c) {
     (void) self;
     return c ? Console_run(c) : false;
@@ -726,6 +750,7 @@ bool Kernel_runConsole(Kernel *self, Console *c) {
 // layout). Completion predicate + per-pass servicing: the loop keeps running
 // until every window closes, and each ask doubles as the generation-driven
 // hot-reload poll (cheap generation compare at frame cadence).
+/** Services application reload/events and reports whether it remains unfinished. */
 static bool kernelGfxAppContinues(void *context) {
     Application *a = (Application*) context;
     if (!a)
@@ -743,6 +768,7 @@ static bool kernelGfxAppContinues(void *context) {
 // or keystroke to any listener. Returning "more queued" lets the graphics loop
 // paint the current scroll position before accepting another event. hotcwap
 // owns the pump (the Window Decoupling Law); vexspoke owns ring dispatch (R2).
+/** Polls one window event step, then dispatches queued key and mouse input. */
 static bool kernelGfxPump(void) {
     bool queued = Window_pollEventStep();
     Key_dispatchEvents();
@@ -750,6 +776,7 @@ static bool kernelGfxPump(void) {
     return queued;
 }
 
+/** Starts one application through the installed graphics runner or parked loop. */
 int Kernel_runApplication(Kernel *self, Application *a) {
     if (!self || !a)
         return KERNEL_EXIT_NO_APPS;
@@ -775,6 +802,7 @@ int Kernel_runApplication(Kernel *self, Application *a) {
 // Registration is the PRE-arm contract: while Kernel_runAll is live, the
 // arming thread's adds are refused (one warn) and other threads' adds post
 // to the deferred mailbox, admitted on the running thread's next pass.
+/** Registers now or defers the application add to the active run thread. */
 bool Kernel_addApplication(Kernel *self, Application *app) {
     if (!self || !app)
         return false;
@@ -792,6 +820,7 @@ bool Kernel_addApplication(Kernel *self, Application *app) {
     return kernelAddApplicationInternal(self, app);
 }
 
+/** Removes a registered application without destroying the borrowed object. */
 bool Kernel_removeApplication(Kernel *self, Application *app) {
     if (!self || !app)
         return false;
@@ -806,6 +835,7 @@ bool Kernel_removeApplication(Kernel *self, Application *app) {
 }
 
 // --- PROCESS REGISTRY ---
+/** Registers now or defers the process add to the active run thread. */
 bool Kernel_addProcess(Kernel *self, Process *p) {
     if (!self || !p)
         return false;
@@ -823,6 +853,7 @@ bool Kernel_addProcess(Kernel *self, Process *p) {
     return kernelAddProcessInternal(self, p);
 }
 
+/** Removes a registered process without freeing it. */
 bool Kernel_removeProcess(Kernel *self, Process *p) {
     if (!self || !p)
         return false;
@@ -837,6 +868,7 @@ bool Kernel_removeProcess(Kernel *self, Process *p) {
 }
 
 // --- CONSOLE REGISTRY ---
+/** Registers now or defers the console add to the active run thread. */
 bool Kernel_addConsole(Kernel *self, Console *c) {
     if (!self || !c)
         return false;
@@ -854,6 +886,7 @@ bool Kernel_addConsole(Kernel *self, Console *c) {
     return kernelAddConsoleInternal(self, c);
 }
 
+/** Removes a registered console without destroying it. */
 bool Kernel_removeConsole(Kernel *self, Console *c) {
     if (!self || !c)
         return false;
@@ -868,6 +901,7 @@ bool Kernel_removeConsole(Kernel *self, Console *c) {
 }
 
 // --- RUN FUNCTIONS & END FUNCTIONS ---
+/** Adds a worker callback to be launched and joined by the next run. */
 bool Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata) {
     if (!self || !fn)
         return false;
@@ -891,6 +925,7 @@ bool Kernel_addRunFunction(Kernel *self, KernelRunFn fn, void *userdata) {
     return true;
 }
 
+/** Adds a completion callback invoked once after supervised work quiesces. */
 bool Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata) {
     if (!self || !fn)
         return false;
@@ -914,6 +949,7 @@ bool Kernel_addEndFunction(Kernel *self, KernelEndFn fn, void *userdata) {
 
 // GETTERS (PUBLIC & PRIVATE)
 ;;GETTER
+/** Returns the number of registered run callbacks. */
 uint32_t Kernel_getRunFunctionCount(const Kernel *self) {
     if (!self)
         return 0;
@@ -921,6 +957,7 @@ uint32_t Kernel_getRunFunctionCount(const Kernel *self) {
 }
 
 ;;GETTER
+/** Returns the number of registered end callbacks. */
 uint32_t Kernel_getEndFunctionCount(const Kernel *self) {
     if (!self)
         return 0;
@@ -928,6 +965,7 @@ uint32_t Kernel_getEndFunctionCount(const Kernel *self) {
 }
 
 ;;GETTER
+/** Returns the application handle at index, or nullptr if absent/out of range. */
 Application *Kernel_getApplication(const Kernel *self, uint32_t index) {
     if (!self)
         return nullptr;
@@ -937,6 +975,7 @@ Application *Kernel_getApplication(const Kernel *self, uint32_t index) {
 }
 
 ;;GETTER
+/** Returns the number of registered applications. */
 uint32_t Kernel_getApplicationCount(const Kernel *self) {
     if (!self)
         return 0;
@@ -944,6 +983,7 @@ uint32_t Kernel_getApplicationCount(const Kernel *self) {
 }
 
 ;;GETTER
+/** Copies up to cap application handles to out and returns the number copied. */
 uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -955,6 +995,7 @@ uint32_t Kernel_getApplications(const Kernel *self, Application **out, uint32_t 
 }
 
 ;;SETTER
+/** Installs or clears the optional graphics application runner callback. */
 void Kernel_setGfxAppRunner(Kernel *self, int (*fn)(void *context, bool (*continueFn)(void *), bool (*pollFn)(void))) {
     if (!self)
         return;
@@ -962,6 +1003,7 @@ void Kernel_setGfxAppRunner(Kernel *self, int (*fn)(void *context, bool (*contin
 }
 
 ;;GETTER
+/** Returns the configured graphics runner, or nullptr for null self. */
 int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continueFn)(void *), bool (*pollFn)(void)) {
     if (!self)
         return nullptr;
@@ -969,6 +1011,7 @@ int (*Kernel_getGfxAppRunner(const Kernel *self))(void *context, bool (*continue
 }
 
 ;;GETTER
+/** Returns the process handle at index, or nullptr if absent/out of range. */
 Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
     if (!self)
         return nullptr;
@@ -978,6 +1021,7 @@ Process *Kernel_getProcess(const Kernel *self, uint32_t index) {
 }
 
 ;;GETTER
+/** Returns the number of registered processes. */
 uint32_t Kernel_getProcessCount(const Kernel *self) {
     if (!self)
         return 0;
@@ -985,6 +1029,7 @@ uint32_t Kernel_getProcessCount(const Kernel *self) {
 }
 
 ;;GETTER
+/** Copies up to cap process handles to out and returns the number copied. */
 uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -996,6 +1041,7 @@ uint32_t Kernel_getProcesses(const Kernel *self, Process **out, uint32_t cap) {
 }
 
 ;;GETTER
+/** Returns the console handle at index, or nullptr if absent/out of range. */
 Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
     if (!self)
         return nullptr;
@@ -1005,6 +1051,7 @@ Console *Kernel_getConsole(const Kernel *self, uint32_t index) {
 }
 
 ;;GETTER
+/** Returns the number of registered consoles. */
 uint32_t Kernel_getConsoleCount(const Kernel *self) {
     if (!self)
         return 0;
@@ -1012,6 +1059,7 @@ uint32_t Kernel_getConsoleCount(const Kernel *self) {
 }
 
 ;;GETTER
+/** Copies up to cap console handles to out and returns the number copied. */
 uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
     if (!self || !out || cap == 0)
         return 0;
@@ -1023,6 +1071,7 @@ uint32_t Kernel_getConsoles(const Kernel *self, Console **out, uint32_t cap) {
 }
 
 ;;GETTER
+/** Returns the opaque master arena handle, or nullptr for null self. */
 void *Kernel_getArena(const Kernel *self) {
     if (!self)
         return nullptr;
@@ -1030,6 +1079,7 @@ void *Kernel_getArena(const Kernel *self) {
 }
 
 ;;GETTER
+/** Returns the opaque transient arena handle, or nullptr for null self. */
 void *Kernel_getTransientArena(const Kernel *self) {
     if (!self)
         return nullptr;
@@ -1037,11 +1087,13 @@ void *Kernel_getTransientArena(const Kernel *self) {
 }
 
 ;;GETTER
+/** Returns the kernel's embedded Lifetime record. */
 Lifetime *Kernel_getLifetime(Kernel *self) {
     return self ? &(*self).lifetime : nullptr;
 }
 
 ;;GETTER
+/** Returns a const pointer to the kernel's embedded Lifetime record. */
 const Lifetime *Kernel_lifetime(const Kernel *self) {
     return self ? &(*self).lifetime : nullptr;
 }

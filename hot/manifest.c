@@ -913,6 +913,7 @@ static bool stage_has_content(const char *dir) {
 
 // --- constructors ------------------------------------------------------------
 
+/** Initializes a caller-buffer path builder with zero current length. */
 ManifestPath ManifestPath_0(char *dest, size_t cap) {
     ManifestPath self;
     self.buf = dest;
@@ -923,6 +924,7 @@ ManifestPath ManifestPath_0(char *dest, size_t cap) {
     return self;
 }
 
+/** Mounts the install tree from a NULL-terminated segment list and loads its catalog. */
 bool Manifest_init(const char *first, ...) {
     if (g_mounted || first == nullptr)
         return false;
@@ -1017,6 +1019,7 @@ bool Manifest_init(const char *first, ...) {
     return true;
 }
 
+/** Removes the mounted install tree only when its segments match the active mount. */
 bool Manifest_uninstall(const char *first, ...) {
     if (!g_mounted || g_segmentCount == 0 || first == nullptr) {
         fprintf(stderr, "hot: UNINSTALL refused — no manifest currently mounted\n");
@@ -1093,6 +1096,7 @@ bool Manifest_uninstall(const char *first, ...) {
 }
 
 ;;INTENTION("MANIFEST must be called before MANIFEST_LIBRARY — the root locks the mount ladder once so every registered key lands in one install tree")
+/** Declares one or more library keys and creates their ladder directories. */
 bool MANIFEST_LIBRARY(const char *first, ...) {
     if (!g_mounted || first == nullptr)
         return false;
@@ -1131,10 +1135,12 @@ bool MANIFEST_LIBRARY(const char *first, ...) {
 
 // --- core functions ----------------------------------------------------------
 
+/** Returns the mounted install root, or nullptr when no manifest is mounted. */
 const char *MANIFEST_ROOT(void) {
     return g_mounted ? g_root : nullptr;
 }
 
+/** Ensures all ladder, library, and cache directories exist for the mount. */
 bool MANIFEST_ENSURE(void) {
     if (!g_mounted)
         return false;
@@ -1154,6 +1160,7 @@ bool MANIFEST_ENSURE(void) {
     return dir_mkdir(path);
 }
 
+/** Seeds a library catalog and its current payload from the supplied source directory. */
 bool MANIFEST_REFLECT(const char *library, const char *sourceDir) {
     if (!g_mounted || !valid_name(library) || sourceDir == nullptr)
         return false;
@@ -1236,6 +1243,7 @@ bool MANIFEST_REFLECT(const char *library, const char *sourceDir) {
     return true;
 }
 
+/** Replaces the staged payload after validating its top-level sections against the catalog. */
 bool MANIFEST_UPDATE(const char *library, const char *payloadDir) {
     if (!g_mounted || !valid_name(library) || payloadDir == nullptr)
         return false;
@@ -1278,6 +1286,7 @@ bool MANIFEST_UPDATE(const char *library, const char *payloadDir) {
     return copy_tree(payloadDir, staged, 0);
 }
 
+/** Slides populated staged library directories through the ladder and advances generations. */
 bool MANIFEST_PROMOTE(void) {
     if (!g_mounted)
         return false;
@@ -1321,6 +1330,7 @@ bool MANIFEST_PROMOTE(void) {
     return true;
 }
 
+/** Determines first-run status using the persistent ledger and install marker. */
 bool MANIFEST_IS_FIRST_RUN(void) {
     if (!g_mounted)
         return true; // fail-closed: no mounted manifest means never installed
@@ -1344,6 +1354,7 @@ bool MANIFEST_IS_FIRST_RUN(void) {
     return !dir_exists(markDir);
 }
 
+/** Returns a mounted library's generation stamp, or zero when unavailable. */
 uint64_t MANIFEST_GENERATION(const char *library) {
     if (!g_mounted || !valid_name(library))
         return 0;
@@ -1355,6 +1366,7 @@ uint64_t MANIFEST_GENERATION(const char *library) {
 
 // --- path builders -----------------------------------------------------------
 
+/** Sets the builder to a resolved root path without creating the root. */
 bool ManifestPath_begin(ManifestPath *self, const char *root) {
     if (self == nullptr || (*self).buf == nullptr || (*self).cap == 0)
         return false;
@@ -1366,6 +1378,7 @@ bool ManifestPath_begin(ManifestPath *self, const char *root) {
     return true;
 }
 
+/** Appends one path segment and optionally creates the resulting directory. */
 bool ManifestPath_push(ManifestPath *self, const char *segment, bool create) {
     if (self == nullptr || segment == nullptr || (*self).buf == nullptr)
         return false;
@@ -1382,6 +1395,7 @@ bool ManifestPath_push(ManifestPath *self, const char *segment, bool create) {
     return true;
 }
 
+/** Builds the selected mounted ladder directory into the caller's buffer. */
 bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool create) {
     if (dest == nullptr || cap == 0)
         return false;
@@ -1404,6 +1418,7 @@ bool ManifestPath_ladderDir(ManifestLadder slot, char *dest, size_t cap, bool cr
     return ManifestPath_push(&p, slot_names[slot], create);
 }
 
+/** Builds a library directory under the selected ladder slot. */
 bool ManifestPath_libraryDir(ManifestLadder slot, const char *library, char *dest, size_t cap, bool create) {
     if (dest == nullptr || cap == 0)
         return false;
@@ -1426,6 +1441,7 @@ bool ManifestPath_libraryDir(ManifestLadder slot, const char *library, char *des
     return ManifestPath_push(&p, library, create);
 }
 
+/** Builds the generation-stamp file path for a mounted library. */
 bool ManifestPath_generationFile(const char *library, char *dest, size_t cap) {
     if (dest == nullptr || cap == 0)
         return false;
@@ -1445,6 +1461,7 @@ bool ManifestPath_generationFile(const char *library, char *dest, size_t cap) {
     return true;
 }
 
+/** Builds the mounted install cache directory path. */
 bool ManifestPath_cacheDir(char *dest, size_t cap) {
     if (dest == nullptr || cap == 0)
         return false;
@@ -1462,6 +1479,7 @@ bool ManifestPath_cacheDir(char *dest, size_t cap) {
     return ManifestPath_push(&p, MANIFEST_CACHE, false);
 }
 
+/** Builds the mounted install manifest JSON path. */
 bool ManifestPath_manifestJson(char *dest, size_t cap) {
     if (dest == nullptr || cap == 0)
         return false;
@@ -1481,10 +1499,12 @@ bool ManifestPath_manifestJson(char *dest, size_t cap) {
 
 // --- getters -----------------------------------------------------------------
 
+/** Returns the builder's destination path, or nullptr when unavailable. */
 const char *ManifestPath_get(const ManifestPath *self) {
     return self == nullptr || (*self).buf == nullptr ? nullptr : (*self).buf;
 }
 
+/** Returns the builder's current path length, or zero for null self. */
 size_t ManifestPath_len(const ManifestPath *self) {
     return self == nullptr ? 0 : (*self).len;
 }
