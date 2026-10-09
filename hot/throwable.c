@@ -95,6 +95,7 @@ static void Throwable_ensureDefaultTeardown(void) {
     }
 }
 
+/** Registers a teardown callback for the process-level throwable shutdown path. */
 void Throwable_registerTeardown(ThrowableTeardownFn fn) {
     if (fn == nullptr) return;
 
@@ -119,6 +120,7 @@ void Throwable_registerTeardown(ThrowableTeardownFn fn) {
     }
 }
 
+/** Removes a previously registered teardown callback. */
 void Throwable_unregisterTeardown(ThrowableTeardownFn fn) {
     if (fn == nullptr || s_teardownList == nullptr) return;
 
@@ -132,6 +134,7 @@ void Throwable_unregisterTeardown(ThrowableTeardownFn fn) {
     }
 }
 
+/** Runs the registered teardown callbacks once in their registered order. */
 void Throwable_runTeardown(void) {
     Throwable_ensureDefaultTeardown();
     if (s_teardownList != nullptr) {
