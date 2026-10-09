@@ -134,6 +134,7 @@
  */
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
+/** Clears all callback slots and owner data, returning false for null self. */
 bool WindowEvent_init(WindowEvent *self) {
     if(self == nullptr)
         return false;
@@ -155,6 +156,7 @@ bool WindowEvent_init(WindowEvent *self) {
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Calls the quit-request callback; permits closing when no handler is installed. */
 bool WindowEvent_fireQuitRequested(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return true;
@@ -163,6 +165,7 @@ bool WindowEvent_fireQuitRequested(WindowEvent *self, Window *window) {
     return (*self).onQuitRequested((*self).self, window);
 }
 
+/** Notifies the owner after the window has completed its close path. */
 void WindowEvent_fireAfterQuit(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -171,6 +174,7 @@ void WindowEvent_fireAfterQuit(WindowEvent *self, Window *window) {
     (*self).onAfterQuit((*self).self, window);
 }
 
+/** Notifies the owner of the window's new content dimensions. */
 void WindowEvent_fireResized(WindowEvent *self, Window *window, int width, int height) {
     if(self == nullptr)
         return;
@@ -179,6 +183,7 @@ void WindowEvent_fireResized(WindowEvent *self, Window *window, int width, int h
     (*self).onResized((*self).self, window, width, height);
 }
 
+/** Notifies the owner that the window origin changed. */
 void WindowEvent_fireMoved(WindowEvent *self, Window *window, int x, int y) {
     if(self == nullptr)
         return;
@@ -187,6 +192,7 @@ void WindowEvent_fireMoved(WindowEvent *self, Window *window, int x, int y) {
     (*self).onMoved((*self).self, window, x, y);
 }
 
+/** Notifies the owner that the window entered fullscreen. */
 void WindowEvent_fireFullscreen(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -195,6 +201,7 @@ void WindowEvent_fireFullscreen(WindowEvent *self, Window *window) {
     (*self).onFullscreen((*self).self, window);
 }
 
+/** Notifies the owner that the window was minimized. */
 void WindowEvent_fireMinimized(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -203,6 +210,7 @@ void WindowEvent_fireMinimized(WindowEvent *self, Window *window) {
     (*self).onMinimized((*self).self, window);
 }
 
+/** Notifies the owner that the window was restored. */
 void WindowEvent_fireRestored(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -211,6 +219,7 @@ void WindowEvent_fireRestored(WindowEvent *self, Window *window) {
     (*self).onRestored((*self).self, window);
 }
 
+/** Notifies the owner of a mouse press on the window. */
 void WindowEvent_firePressed(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -219,6 +228,7 @@ void WindowEvent_firePressed(WindowEvent *self, Window *window) {
     (*self).onPressed((*self).self, window);
 }
 
+/** Notifies the owner that this window gained key focus. */
 void WindowEvent_fireFocusGained(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -227,6 +237,7 @@ void WindowEvent_fireFocusGained(WindowEvent *self, Window *window) {
     (*self).onFocusGained((*self).self, window);
 }
 
+/** Notifies the owner that this window lost key focus. */
 void WindowEvent_fireFocusLost(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -235,6 +246,7 @@ void WindowEvent_fireFocusLost(WindowEvent *self, Window *window) {
     (*self).onFocusLost((*self).self, window);
 }
 
+/** Notifies the owner that the window entered zoom-to-fill. */
 void WindowEvent_fireZoomFilled(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -243,6 +255,7 @@ void WindowEvent_fireZoomFilled(WindowEvent *self, Window *window) {
     (*self).onZoomFilled((*self).self, window);
 }
 
+/** Notifies the owner that the window exited zoom-to-fill. */
 void WindowEvent_fireZoomBack(WindowEvent *self, Window *window) {
     if(self == nullptr)
         return;
@@ -251,6 +264,7 @@ void WindowEvent_fireZoomBack(WindowEvent *self, Window *window) {
     (*self).onZoomBack((*self).self, window);
 }
 
+/** Notifies the owner when the window's occlusion visibility changes. */
 void WindowEvent_fireOcclusionChanged(WindowEvent *self, Window *window, bool visible) {
     if(self == nullptr)
         return;
@@ -262,6 +276,7 @@ void WindowEvent_fireOcclusionChanged(WindowEvent *self, Window *window, bool vi
 // SETTERS (PUBLIC & PRIVATE)
 
 ;;SETTER
+/** Sets the opaque owner value passed to every registered callback. */
 void WindowEvent_setSelf(WindowEvent *self, void *owner) {
     if(self == nullptr)
         return;
@@ -269,6 +284,7 @@ void WindowEvent_setSelf(WindowEvent *self, void *owner) {
 }
 
 ;;SETTER
+/** Replaces the vetoable quit-request callback. */
 void WindowEvent_setOnQuitRequested(WindowEvent *self, WindowQuitRequestedFn fn) {
     if(self == nullptr)
         return;
@@ -276,6 +292,7 @@ void WindowEvent_setOnQuitRequested(WindowEvent *self, WindowQuitRequestedFn fn)
 }
 
 ;;SETTER
+/** Replaces the post-close callback. */
 void WindowEvent_setOnAfterQuit(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -283,6 +300,7 @@ void WindowEvent_setOnAfterQuit(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the content-resize callback. */
 void WindowEvent_setOnResized(WindowEvent *self, WindowResizedFn fn) {
     if(self == nullptr)
         return;
@@ -290,6 +308,7 @@ void WindowEvent_setOnResized(WindowEvent *self, WindowResizedFn fn) {
 }
 
 ;;SETTER
+/** Replaces the window-move callback. */
 void WindowEvent_setOnMoved(WindowEvent *self, WindowMovedFn fn) {
     if(self == nullptr)
         return;
@@ -297,6 +316,7 @@ void WindowEvent_setOnMoved(WindowEvent *self, WindowMovedFn fn) {
 }
 
 ;;SETTER
+/** Replaces the fullscreen-entry callback. */
 void WindowEvent_setOnFullscreen(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -304,6 +324,7 @@ void WindowEvent_setOnFullscreen(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the minimize callback. */
 void WindowEvent_setOnMinimized(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -311,6 +332,7 @@ void WindowEvent_setOnMinimized(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the restore callback. */
 void WindowEvent_setOnRestored(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -318,6 +340,7 @@ void WindowEvent_setOnRestored(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the mouse-press callback. */
 void WindowEvent_setOnPressed(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -325,6 +348,7 @@ void WindowEvent_setOnPressed(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the focus-gained callback. */
 void WindowEvent_setOnFocusGained(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -332,6 +356,7 @@ void WindowEvent_setOnFocusGained(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the focus-lost callback. */
 void WindowEvent_setOnFocusLost(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -339,6 +364,7 @@ void WindowEvent_setOnFocusLost(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the zoom-to-fill callback. */
 void WindowEvent_setOnZoomFilled(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -346,6 +372,7 @@ void WindowEvent_setOnZoomFilled(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the zoom-exit callback. */
 void WindowEvent_setOnZoomBack(WindowEvent *self, WindowNoArgFn fn) {
     if(self == nullptr)
         return;
@@ -353,6 +380,7 @@ void WindowEvent_setOnZoomBack(WindowEvent *self, WindowNoArgFn fn) {
 }
 
 ;;SETTER
+/** Replaces the occlusion-visibility callback. */
 void WindowEvent_setOnOcclusionChanged(WindowEvent *self, WindowOcclusionFn fn) {
     if(self == nullptr)
         return;
@@ -362,6 +390,7 @@ void WindowEvent_setOnOcclusionChanged(WindowEvent *self, WindowOcclusionFn fn) 
 // GETTERS (PUBLIC & PRIVATE)
 
 ;;GETTER
+/** Returns the opaque owner supplied to callback handlers. */
 void *WindowEvent_getSelf(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -369,6 +398,7 @@ void *WindowEvent_getSelf(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered quit-request callback. */
 WindowQuitRequestedFn WindowEvent_getOnQuitRequested(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -376,6 +406,7 @@ WindowQuitRequestedFn WindowEvent_getOnQuitRequested(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered post-close callback. */
 WindowNoArgFn WindowEvent_getOnAfterQuit(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -383,6 +414,7 @@ WindowNoArgFn WindowEvent_getOnAfterQuit(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered content-resize callback. */
 WindowResizedFn WindowEvent_getOnResized(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -390,6 +422,7 @@ WindowResizedFn WindowEvent_getOnResized(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered window-move callback. */
 WindowMovedFn WindowEvent_getOnMoved(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -397,6 +430,7 @@ WindowMovedFn WindowEvent_getOnMoved(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered fullscreen callback. */
 WindowNoArgFn WindowEvent_getOnFullscreen(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -404,6 +438,7 @@ WindowNoArgFn WindowEvent_getOnFullscreen(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered minimize callback. */
 WindowNoArgFn WindowEvent_getOnMinimized(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -411,6 +446,7 @@ WindowNoArgFn WindowEvent_getOnMinimized(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered restore callback. */
 WindowNoArgFn WindowEvent_getOnRestored(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -418,6 +454,7 @@ WindowNoArgFn WindowEvent_getOnRestored(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered mouse-press callback. */
 WindowNoArgFn WindowEvent_getOnPressed(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -425,6 +462,7 @@ WindowNoArgFn WindowEvent_getOnPressed(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered focus-gained callback. */
 WindowNoArgFn WindowEvent_getOnFocusGained(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -432,6 +470,7 @@ WindowNoArgFn WindowEvent_getOnFocusGained(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered focus-lost callback. */
 WindowNoArgFn WindowEvent_getOnFocusLost(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -439,6 +478,7 @@ WindowNoArgFn WindowEvent_getOnFocusLost(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered zoom-to-fill callback. */
 WindowNoArgFn WindowEvent_getOnZoomFilled(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -446,6 +486,7 @@ WindowNoArgFn WindowEvent_getOnZoomFilled(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered zoom-exit callback. */
 WindowNoArgFn WindowEvent_getOnZoomBack(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
@@ -453,6 +494,7 @@ WindowNoArgFn WindowEvent_getOnZoomBack(const WindowEvent *self) {
 }
 
 ;;GETTER
+/** Returns the currently registered occlusion-visibility callback. */
 WindowOcclusionFn WindowEvent_getOnOcclusionChanged(const WindowEvent *self) {
     if(self == nullptr)
         return nullptr;
