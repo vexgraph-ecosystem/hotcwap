@@ -122,6 +122,7 @@ static void apply_record(Ledger *ledger, const char *record) {
     (*ledger).version[vlen] = '\0';
 }
 
+/** Opens or loads the machine-scoped record for the organization/application pair. */
 Ledger *Ledger_open(const char *org, const char *app) {
     if (org == nullptr || app == nullptr || *org == '\0' || *app == '\0')
         return nullptr;
@@ -148,10 +149,12 @@ Ledger *Ledger_open(const char *org, const char *app) {
     return ledger;
 }
 
+/** Frees the ledger's owned strings and resets its in-memory record. */
 void Ledger_free(Ledger *ledger) {
     free(ledger);
 }
 
+/** Persists the requested install state and optional version in the ledger file. */
 static bool write_state(Ledger *ledger, const char *state, const char *version) {
     char dir[400];
     if (!state_dir(dir, sizeof(dir)) || !mkdir_p(dir))
@@ -173,18 +176,21 @@ static bool write_state(Ledger *ledger, const char *state, const char *version) 
     return true;
 }
 
+/** Records the installation and version for this application identity. */
 bool Ledger_recordInstall(Ledger *ledger, const char *version) {
     if (ledger == nullptr)
         return false;
     return write_state(ledger, "installed", version);
 }
 
+/** Marks the recorded installation uninstalled without deleting its history. */
 bool Ledger_markUninstalled(Ledger *ledger) {
     if (ledger == nullptr)
         return false;
     return write_state(ledger, "uninstalled", (*ledger).version);
 }
 
+/** Removes the machine-scoped ledger record for this identity. */
 bool Ledger_forget(Ledger *ledger) {
     if (ledger == nullptr)
         return false;
@@ -195,14 +201,17 @@ bool Ledger_forget(Ledger *ledger) {
     return true;
 }
 
+/** Returns the current recorded ledger state. */
 LedgerState Ledger_state(const Ledger *ledger) {
     return ledger ? (*ledger).state : LEDGER_ABSENT;
 }
 
+/** Reports whether a machine-scoped record exists for the ledger identity. */
 bool Ledger_hasRecord(const Ledger *ledger) {
     return ledger != nullptr && (*ledger).state != LEDGER_ABSENT;
 }
 
+/** Copies the last recorded version into the caller's bounded buffer. */
 bool Ledger_lastVersion(const Ledger *ledger, char *dest, size_t cap) {
     if (ledger == nullptr || dest == nullptr || cap == 0)
         return false;
@@ -210,6 +219,7 @@ bool Ledger_lastVersion(const Ledger *ledger, char *dest, size_t cap) {
     return true;
 }
 
+/** Returns the ledger's last diagnostic string, or a fallback for null. */
 const char *Ledger_lastError(const Ledger *ledger) {
     (void) ledger;
     return "";

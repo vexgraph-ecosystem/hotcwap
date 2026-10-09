@@ -108,16 +108,19 @@ static float s_glowStrength = 1.0f;
 
 // CONSTRUCTORS (PUBLIC & PRIVATE)
 
+/** Initializes the stateless module and reports success. */
 bool Hot_init_module(void) {
     return true;
 }
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
 
+/** Performs module teardown; this module currently owns no external resources. */
 void Hot_shutdown_module(void) {
     return;
 }
 
+/** Writes the current v3 state fields to the caller's buffer. */
 bool Hot_save(void *buf, size_t cap, size_t *outLen) {
     if (!buf || !outLen)
         return false;
@@ -133,6 +136,7 @@ bool Hot_save(void *buf, size_t cap, size_t *outLen) {
     return true;
 }
 
+/** Restores recognized v1/v2 state or a v3 blob with the expected schema magic. */
 bool Hot_restore(const void *buf, size_t len) {
     if (!buf)
         return false;
@@ -161,6 +165,7 @@ bool Hot_restore(const void *buf, size_t len) {
     return true;
 }
 
+/** Converts supported legacy state versions to v3, or copies a fitting unknown version. */
 bool Hot_migrate(const char *oldVersion, const void *oldBuf, size_t oldLen,
                  void *newBuf, size_t newCap, size_t *outLen) {
     if (!oldVersion || !oldBuf || !newBuf || !outLen)
@@ -192,6 +197,7 @@ bool Hot_migrate(const char *oldVersion, const void *oldBuf, size_t oldLen,
     return false;
 }
 
+/** Returns the static JSON module descriptor. */
 const char *Hot_manifest(void) {
     return "{\"name\": \"hot_behavior\", \"version\": \"" HOT_BEHAVIOR_VERSION "\", "
         "\"type_ids\": [{\"name\": \"BehaviorState\", \"value\": 2}], "
@@ -230,18 +236,21 @@ static const HotModuleExport s_exports[] = {
     { "Hot_migrate",           (void*) Hot_migrate },
 };
 
+/** Returns this module's static trampoline export table and optional row count. */
 const void *VkModuleGetTrampolines(uint32_t *outCount) {
     if (outCount)
         (*outCount) = (uint32_t) (sizeof(s_exports) / sizeof(s_exports[0]));
     return s_exports;
 }
 
+/** Computes a sinusoidal pulse shifted by phase bias and scaled by glow strength. */
 float hot_behavior_pulse(double nowSeconds) {
     double t = nowSeconds + (double) s_phaseBias;
     float base = 0.5f + 0.5f * sinf((float) (t * 6.28318530718));
     return base * s_glowStrength > 1.0f ? 1.0f : base * s_glowStrength;
 }
 
+/** Computes bar height and pulse-scaled width into whichever outputs are supplied. */
 void hot_behavior_bar(float w, float h, float pulse, float *outBarH, float *outBarW) {
     float barH = h * 0.08f;
     float barW = w * pulse;
@@ -252,6 +261,7 @@ void hot_behavior_bar(float w, float h, float pulse, float *outBarH, float *outB
     (void) w;
 }
 
+/** Returns the asset-relative texture path used by the host. */
 const char *hot_texture_path(void) {
     // Portable asset-relative path: the host resolves this against its asset
     // root (never an absolute developer-machine path — those break every
@@ -262,6 +272,7 @@ const char *hot_texture_path(void) {
 // SETTERS (PUBLIC & PRIVATE)
 
 ;;SETTER
+/** Replaces the module's phase offset used by pulse calculations. */
 void hot_behavior_set_phase_bias(float value) {
     s_phaseBias = value;
 }
@@ -269,6 +280,7 @@ void hot_behavior_set_phase_bias(float value) {
 // GETTERS (PUBLIC & PRIVATE)
 
 ;;GETTER
+/** Returns the module's current phase offset. */
 float hot_behavior_get_phase_bias(void) {
     return s_phaseBias;
 }

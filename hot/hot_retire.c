@@ -79,6 +79,7 @@
  */
 
 // CORE FUNCTIONS (PUBLIC & PRIVATE)
+/** Adds a loaded handle to the retire ring so delayed callers can finish. */
 void HotRetireRing_retire(HotRetireRing *self, void *handle) {
     if (!self || !handle) return;
 
@@ -119,6 +120,7 @@ void HotRetireRing_retire(HotRetireRing *self, void *handle) {
     (*dest).generation = (*self).generation;
 }
 
+/** Advances the grace period and closes handles whose callers have quiesced. */
 void HotRetireRing_advance(HotRetireRing *self) {
     if (!self) return;
     (*self).generation++;
@@ -131,6 +133,7 @@ void HotRetireRing_advance(HotRetireRing *self) {
     }
 }
 
+/** Closes every handle still retained by the ring. */
 void HotRetireRing_drainAll(HotRetireRing *self) {
     if (!self) return;
     for (size_t i = 0; i < HOT_RETIRED_MAX; i++) {
