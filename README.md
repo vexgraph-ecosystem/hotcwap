@@ -25,20 +25,6 @@ runtime with a working macOS backend, not a finished multi-platform host.
 - **Platforms:** proven on Apple Silicon macOS 14+ only. Linux and Windows host
   backends are unproven here.
 
-## CLion: CMake is IDE metadata only
-
-Open this repository root as a CMake project. `CMakeLists.txt` provides C23
-and host-platform Objective-C source targets, include paths and flags for
-navigation, diagnostics and inlay hints. Targets are excluded from the default
-build; no linking, dependency downloads or application runner are wired into it.
-Set `VEXSPOKE_SOURCE_DIR` and `GRAPHVEX_SOURCE_DIR` to local `src/` checkouts.
-Missing headers stay real IDE errors; no fake declarations are generated.
-IDE appearance is user-verified; untested platform backends remain unproved.
-
-Build with [b](https://github.com/vex-graph/b), not this adapter. From the
-Vexgraph workspace root: `./tools/b build hotcwap`. IDE metadata does not prove
-runtime ownership, hot reload or standalone dependency closure.
-
 Zero-downtime dynamic module hot-reloading, persistent OS windowing, and process supervision.
 
 A play on the term **hot swap** — `hotcwap` is an infrastructure runtime designed to reload compiled C23 dynamic libraries in real-time without restarting the process, losing application state, or destroying the native operating system window.
@@ -95,10 +81,9 @@ Kernel_destroy(k);                 // 7b. end the kernel (stops apps, arenas LAS
 ```
 
 ### Standalone autonomy
-The Standalone Autonomy Law still requires runtime dependency closure. This
-IDE-only adapter exports no runtime library and never fetches dependencies;
-supply local headers through its dependency-path options. A successful IDE
-configure is not a standalone runtime build.
+The Standalone Autonomy Law requires runtime dependency closure through
+[b](https://github.com/vex-graph/b), with real R2/R3 contracts. Workspace editor
+configuration is not a standalone runtime build.
 
 ---
 
@@ -136,5 +121,4 @@ hotcwap is the R1 layer only. It deliberately does not do the following:
 - **It claims no multi-platform proof.** macOS is proven; the Linux X11 backend
   is a fallback, and the Wayland and Win32 backends are drafts pending their own
   hosts.
-- **It is not a standalone runtime through the IDE adapter.** The CMake project
-  is metadata only; real builds use `b`.
+- **Standalone runtime dependency closure requires its own build proof.**
